@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+
+# Backup of original inner repo (local only)
+.git.backup/
+**/.git.backup/
+
+# Secrets — real values local only
+**/Secrets.swift
+!**/Secrets.swift.template
+
+# Xcode
+build/
+DerivedData/
+**/xcuserdata/
+**/*.xcuserstate
+**/*.xcscmblueprint
+**/*.xccheckout
+
+# SwiftPM
+.swiftpm/
+.build/
+Packages/
+Package.pins
+Package.resolved
+
+# CocoaPods (if ever used)
+Pods/
+
+# Carthage
+Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Misc
+*.log
+*.tmp

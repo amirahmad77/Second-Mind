@@ -24,7 +24,26 @@ enum NousLogger {
     // One os.Logger per subsystem. Categories bucket log noise for Console filtering.
     static let subsystem = "com.nous-core.NOUS-0"
 
-    private static let loggers: [String: Logger] = [:]
+    // Cached ISO8601 formatter — DateFormatter/ISO8601DateFormatter are expensive to init.
+    private static let iso8601: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    // Platform tag injected into every Axiom entry.
+    private static let platformTag: String = {
+        #if os(macOS)
+        return "macos"
+        #elseif os(visionOS)
+        return "visionos"
+        #elseif os(iOS)
+        return "ios"
+        #else
+        return "unknown"
+        #endif
+    }()
+
     private static var _loggers: [String: Logger] = [:]
     private static let loggerLock = NSLock()
 
@@ -69,11 +88,11 @@ enum NousLogger {
         }
         // Build Axiom entry. _time field is required for correct time indexing.
         var entry: [String: Any] = [
-            "_time": ISO8601DateFormatter().string(from: Date()),
-            "level": level.rawValue,
+            "_time":    iso8601.string(from: Date()),
+            "level":    level.rawValue,
             "category": category,
-            "message": message,
-            "platform": "ios",
+            "message":  message,
+            "platform": platformTag,
         ]
         for (k, v) in meta { entry[k] = v }
         AxiomShipper.shared.append(entry)

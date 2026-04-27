@@ -32,7 +32,7 @@ struct MacMenuBarContent: View {
             if let store, !store.ordered.isEmpty {
                 Divider()
                     .overlay(NSColorToken.textGhost.opacity(0.10))
-                recentAtoms(store: store)
+                recentAtoms(store)
             }
             Divider()
                 .overlay(NSColorToken.textGhost.opacity(0.10))

@@ -190,11 +190,12 @@ struct MacAtomDetail: View {
                         Text("// tags")
                             .font(NFont.mono(10))
                             .foregroundStyle(NSColorToken.textGhost)
-                        FlexibleTagRow(
-                            tags: atom.tags,
-                            tint: atom.type.phosphor,
-                            onTap: nil
-                        )
+                        TagFlow {
+                            ForEach(atom.tags, id: \.self) { tag in
+                                TagChip(value: tag.value,
+                                        phosphor: atom.type.phosphor)
+                            }
+                        }
                     }
                 }
 

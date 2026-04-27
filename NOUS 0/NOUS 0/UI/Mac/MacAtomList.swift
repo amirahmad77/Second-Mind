@@ -230,13 +230,14 @@ private struct MacAtomRow: View {
 
                 // Tags (if any)
                 if !atom.tags.isEmpty {
-                    FlexibleTagRow(
-                        tags: atom.tags,
-                        tint: atom.type.phosphor,
-                        onTap: nil
-                    )
-                    .scaleEffect(0.85, anchor: .leading)
-                    .frame(height: 14)
+                    TagFlow(hSpacing: NSpace.xs, vSpacing: 2) {
+                        ForEach(atom.tags, id: \.self) { tag in
+                            TagChip(value: tag.value,
+                                    phosphor: atom.type.phosphor,
+                                    compact: true)
+                        }
+                    }
+                    .frame(height: 12)
                     .clipped()
                 }
             }

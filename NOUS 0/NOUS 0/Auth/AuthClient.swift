@@ -343,14 +343,20 @@ enum AuthError: LocalizedError {
 
 extension AuthClient: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if os(macOS)
+        return MainActor.assumeIsolated {
+            NSApplication.shared.keyWindow ?? ASPresentationAnchor()
+        }
+        #else
         // Find the first connected foreground window. iOS 17+ scene-based.
-        MainActor.assumeIsolated {
+        return MainActor.assumeIsolated {
             UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
                 .first(where: { $0.activationState == .foregroundActive })?
                 .windows.first(where: \.isKeyWindow)
                 ?? ASPresentationAnchor()
         }
+        #endif
     }
 }
 

@@ -178,7 +178,13 @@ struct MacAtomDetail: View {
                         .onSubmit { commitEdit() }
                 } else {
                     let content = showRaw ? atom.rawContent : atom.displayContent
-                    MarkdownView(text: content, atomID: atom.id, store: store, tint: atom.type.phosphor)
+                    MarkdownView(
+                        raw: content,
+                        store: store,
+                        atomID: atom.id,
+                        linkColor: atom.type.phosphor,
+                        onPickAtom: { a in onPickRelated?(a) }
+                    )
                         .font(NFont.detailBody(15))
                         .foregroundStyle(NSColorToken.textPrimary)
                         .textSelection(.enabled)

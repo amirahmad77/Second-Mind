@@ -169,10 +169,11 @@ struct MacSynthesisView: View {
                 Group {
                     if case .done = vm.stage {
                         MarkdownView(
-                            text: vm.answer,
-                            atomID: nil,
+                            raw: vm.answer,
                             store: store,
-                            tint: NSColorToken.Phos.violet
+                            atomID: UUID(),
+                            linkColor: NSColorToken.Phos.violet,
+                            onPickAtom: { _ in }
                         )
                     } else {
                         Text(vm.answer)
@@ -241,14 +242,6 @@ struct MacSynthesisView: View {
             Capsule()
                 .strokeBorder(NSColorToken.Phos.violet.opacity(0.18), lineWidth: 0.5)
         )
-    }
-}
-
-// MARK: – MarkdownView nil-atomID overload
-
-private extension MarkdownView {
-    init(text: String, atomID: UUID?, store: AtomStore, tint: Color) {
-        self.init(text: text, atomID: atomID ?? UUID(), store: store, tint: tint)
     }
 }
 

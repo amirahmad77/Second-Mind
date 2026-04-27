@@ -22,6 +22,14 @@ struct NOUS_0App: App {
     init() {
         seedDefaults()
         #if os(macOS)
+        // On macOS 26 (Tahoe), apps that have a MenuBarExtra scene can be
+        // assigned .accessory activation policy by the OS. Accessory apps render
+        // windows but those windows don't receive mouse events without explicit
+        // activation — they look interactive but every click is silently dropped.
+        // Forcing .regular here, before SwiftUI builds its scene graph, prevents
+        // the OS from downgrading the policy and guarantees the main window is
+        // fully interactive from first click.
+        NSApplication.shared.setActivationPolicy(.regular)
         MacGlobalHotkey.register()
         #else
         UNUserNotificationCenter.current().delegate = ProactiveNotificationDelegate.shared
@@ -60,10 +68,43 @@ struct NOUS_0App: App {
     private var macScenes: some Scene {
         // Main three-column window
         WindowGroup("NOUS", id: "main") {
-            if auth.isAuthenticated {
-                MacRootView()
-            } else {
-                SignInView(auth: auth)
+            Group {
+                if auth.isAuthenticated {
+                    MacRootView()
+                } else {
+                    SignInView(auth: auth)
+                }
+            }
+            .onAppear {
+                // Re-assert .regular after SwiftUI scene setup, which can
+                // silently downgrade policy back to .accessory on macOS 26.
+                NSApplication.shared.setActivationPolicy(.regular)
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    // Diagnostic: print every window's state to Xcode console.
+                    // Look for ignoresMouseEvents=true or isKeyWindow=false.
+                    for (i, win) in NSApplication.shared.windows.enumerated() {
+                        let info = "[\(i)] '\(win.title)' key=\(win.isKeyWindow) " +
+                            "main=\(win.isMainWindow) visible=\(win.isVisible) " +
+                            "ignoresMouse=\(win.ignoresMouseEvents) " +
+                            "level=\(win.level.rawValue) class=\(type(of: win))"
+                        print("[NOUS-DIAG] \(info)")
+                        NousLogger.info("mac.window", "window state", [
+                            "idx": "\(i)", "title": win.title,
+                            "isKey": "\(win.isKeyWindow)",
+                            "ignoresMouse": "\(win.ignoresMouseEvents)",
+                            "level": "\(win.level.rawValue)"
+                        ])
+                        // Force all windows to accept mouse events.
+                        win.ignoresMouseEvents = false
+                    }
+                    print("[NOUS-DIAG] activationPolicy=\(NSApplication.shared.activationPolicy().rawValue)")
+                    // Bring main window forward and make it key.
+                    let mainWin = NSApplication.shared.windows
+                        .first(where: { $0.isVisible && !$0.isMiniaturized && !($0 is NSPanel) })
+                    mainWin?.makeKeyAndOrderFront(nil)
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                }
             }
         }
         .modelContainer(for: [NoteEventRecord.self, EmbeddingRecord.self])

@@ -26,7 +26,7 @@ struct SignInView: View {
         ZStack {
             NSColorToken.inkVoid
                 .ignoresSafeArea()
-                .allowsHitTesting(false)   // macOS: Color is hittable by default; must opt out
+                .allowsHitTesting(false)
             backdrop
 
             VStack(spacing: 0) {
@@ -44,8 +44,21 @@ struct SignInView: View {
                 errorToast(visibleError)
             }
         }
+        #if os(iOS) || os(visionOS)
         .preferredColorScheme(.dark)
+        #endif
+        // DEBUG: fire on any tap anywhere in the window to verify window is interactive
+        .background(
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { NousLogger.info("auth", "window tap detected") }
+        )
         .onAppear {
+            #if os(macOS)
+            // Make app frontmost immediately — without this, first click
+            // goes to making the window key rather than hitting the button.
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            #endif
             withAnimation(.timingCurve(0.23, 1.0, 0.32, 1.0, duration: 0.42)) {
                 wordmarkVisible = true
             }

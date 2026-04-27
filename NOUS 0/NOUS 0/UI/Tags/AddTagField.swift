@@ -40,7 +40,9 @@ struct AddTagField: View {
                     .foregroundStyle(NSColorToken.textPrimary)
                     .focused($focus)
                     .submitLabel(.done)
+                    #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.never)
+                    #endif
                     .autocorrectionDisabled(true)
                     .onSubmit { commit() }
                 Button(action: onCancel) {

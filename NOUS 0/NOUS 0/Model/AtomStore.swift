@@ -9,9 +9,11 @@ final class AtomStore {
     private(set) var atoms: [UUID: AtomSnapshot] = [:]
     /// Ordered newest-first for Stream.
     private(set) var ordered: [AtomSnapshot] = []
+    /// target → set of source IDs that link to it
+    private var inboundLinks: [UUID: Set<UUID>] = [:]
 
     /// Memoization for Stream grouping. Invalidated whenever ordered/filter changes.
-    private var groupCache: (filter: String, version: Int, value: [DayGroup])?
+    private var groupCache: (filter: String, tag: String, version: Int, value: [DayGroup])?
     private var version: Int = 0
 
     private let context: ModelContext
@@ -29,6 +31,11 @@ final class AtomStore {
         let rows = (try? context.fetch(desc)) ?? []
         for row in rows { if let e = row.toEvent() { apply(e, persist: false) } }
         rebuildOrdered()
+        // Re-queue refine for atoms orphaned mid-refine (app killed during Gemini call).
+        // Their .created event set isRefining=true but no .refined event was ever persisted.
+        for atom in atoms.values where atom.isRefining && !atom.isDeleted {
+            startRefine(id: atom.id, raw: atom.rawContent)
+        }
     }
 
     // MARK: - Public mutations
@@ -79,9 +86,69 @@ final class AtomStore {
         apply(ev, persist: true)
     }
 
+    func toggleChecklistItem(id: UUID, lineIndex: Int) {
+        guard let a = atoms[id] else { return }
+        let content = a.refinedContent ?? a.rawContent
+        var lines = content.components(separatedBy: "\n")
+        guard lineIndex < lines.count else { return }
+        let line = lines[lineIndex]
+        if line.contains("- [ ]") {
+            lines[lineIndex] = line.replacingOccurrences(of: "- [ ]", with: "- [x]", options: .literal)
+        } else if line.contains("- [x]") || line.contains("- [X]") {
+            lines[lineIndex] = line
+                .replacingOccurrences(of: "- [x]", with: "- [ ]", options: .literal)
+                .replacingOccurrences(of: "- [X]", with: "- [ ]", options: .literal)
+        } else { return }
+        let updated = lines.joined(separator: "\n")
+        let ev = NoteEvent(atomID: id, kind: .updatedRaw, payload: .init(content: updated))
+        apply(ev, persist: true)
+    }
+
+    func setDue(for id: UUID, days: Int) {
+        let cal = Calendar.current
+        let due = cal.startOfDay(for: cal.date(byAdding: .day, value: days, to: Date()) ?? Date())
+        let ev = NoteEvent(atomID: id, kind: .dueSet, payload: .init(dueAt: due))
+        apply(ev, persist: true)
+    }
+
+    func setDue(id: UUID, to date: Date?) {
+        let ev = NoteEvent(atomID: id, kind: .dueSet, payload: .init(dueAt: date))
+        apply(ev, persist: true)
+    }
+
     func delete(id: UUID) {
         let ev = NoteEvent(atomID: id, kind: .deleted, payload: .init())
         apply(ev, persist: true)
+        rebuildOrdered()
+    }
+
+    func addTag(id: UUID, tag: String) {
+        guard let atom = atoms[id] else { return }
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return }
+        var current = atom.tags.map(\.value)
+        guard !current.contains(trimmed) else { return }
+        current.append(trimmed)
+        let ev = NoteEvent(atomID: id, kind: .tagged, payload: .init(tags: current))
+        apply(ev, persist: true)
+    }
+
+    func removeTag(id: UUID, tag: String) {
+        guard let atom = atoms[id] else { return }
+        let remaining = atom.tags.map(\.value).filter { $0 != tag }
+        let ev = NoteEvent(atomID: id, kind: .tagged, payload: .init(tags: remaining))
+        apply(ev, persist: true)
+    }
+
+    private var pendingDeleteIDs: Set<UUID> = []
+
+    func stagePendingDelete(id: UUID) {
+        pendingDeleteIDs.insert(id)
+        rebuildOrdered()
+    }
+
+    func cancelPendingDelete(id: UUID) {
+        pendingDeleteIDs.remove(id)
         rebuildOrdered()
     }
 
@@ -116,12 +183,19 @@ final class AtomStore {
         case .dueSet:
             a.dueAt = e.payload.dueAt
         case .linked:
-            break // v1 no UI for backlinks beyond count; skip
+            if let target = e.payload.linkTargetID {
+                inboundLinks[target, default: []].insert(e.atomID)
+            }
         case .deleted:
             a.isDeleted = true
         }
         a.updatedAt = e.createdAt
         atoms[e.atomID] = a
+        // Keep ordered in sync so stream rows see live snapshots without a full
+        // rebuildOrdered(). rebuildOrdered() overwrites this when called (created/deleted).
+        if let idx = ordered.firstIndex(where: { $0.id == e.atomID }) {
+            ordered[idx] = a
+        }
         // Mutation may invalidate filter results / mtg counts.
         version &+= 1
         groupCache = nil
@@ -136,7 +210,7 @@ final class AtomStore {
 
     private func rebuildOrdered() {
         ordered = atoms.values
-            .filter { !$0.isDeleted }
+            .filter { !$0.isDeleted && !pendingDeleteIDs.contains($0.id) }
             .sorted { $0.createdAt > $1.createdAt }
         version &+= 1
         groupCache = nil
@@ -151,20 +225,56 @@ final class AtomStore {
             apply(ev, persist: true)
             return
         }
-        Task.detached { [gemini] in
-            guard let refined = try? await gemini.refine(raw: raw) else {
-                // Clear isRefining even on failure so UI doesn't hang.
-                await MainActor.run {
-                    let ev = NoteEvent(atomID: id, kind: .refined, payload: .init(refinedContent: ""))
-                    self.apply(ev, persist: true)
+        let atomType = atoms[id]?.type ?? .thought
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await gemini.refine(raw: raw, type: atomType)
+                // Type reveal: apply detected type FIRST so the dot/header bloom before
+                // the content crossfade. Wrapped in spring animation for a visible pop.
+                if let detected = result.type, detected != (atoms[id]?.type ?? atomType) {
+                    let typeEv = NoteEvent(atomID: id, kind: .typeChanged, payload: .init(type: detected))
+                    apply(typeEv, persist: true)
                 }
-                return
-            }
-            await MainActor.run {
-                let ev = NoteEvent(atomID: id, kind: .refined, payload: .init(refinedContent: refined))
-                self.apply(ev, persist: true)
+                let ev = NoteEvent(atomID: id, kind: .refined, payload: .init(refinedContent: result.refined))
+                apply(ev, persist: true)
+                if !result.tags.isEmpty {
+                    let tagEv = NoteEvent(atomID: id, kind: .tagged, payload: .init(tags: result.tags))
+                    apply(tagEv, persist: true)
+                }
+            } catch {
+                NousLogger.error("store", "startRefine failed", ["id": id.uuidString, "error": error.localizedDescription])
+                let ev = NoteEvent(atomID: id, kind: .refined, payload: .init(refinedContent: ""))
+                apply(ev, persist: true)
             }
         }
+    }
+
+    /// Manual type override from the detail view.
+    func setType(id: UUID, to type: AtomType) {
+        guard atoms[id]?.type != type else { return }
+        let ev = NoteEvent(atomID: id, kind: .typeChanged, payload: .init(type: type))
+        apply(ev, persist: true)
+    }
+
+    // MARK: - Link suggestions
+
+    struct LinkSuggestion: Identifiable {
+        let target: UUID
+        let reason: String
+        var id: UUID { target }
+    }
+
+    private(set) var linkSuggestions: [UUID: [LinkSuggestion]] = [:]
+
+    func confirmSuggestion(for atomID: UUID, target: UUID) {
+        let ev = NoteEvent(atomID: atomID, kind: .linked, payload: .init(linkTargetID: target, linkKind: "also-see"))
+        apply(ev, persist: true)
+        linkSuggestions[atomID]?.removeAll { $0.target == target }
+    }
+
+    func dismissSuggestion(for atomID: UUID, target: UUID) {
+        linkSuggestions[atomID]?.removeAll { $0.target == target }
     }
 
     // MARK: - Stream grouping
@@ -176,23 +286,33 @@ final class AtomStore {
         var mtgCount: Int { atoms.filter { $0.type == .meeting }.count }
     }
 
-    func groupedByDay(filter: String? = nil) -> [DayGroup] {
+    func groupedByDay(filter: String? = nil, tag: String? = nil) -> [DayGroup] {
         let key = filter?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if let c = groupCache, c.filter == key, c.version == version { return c.value }
+        let tagKey = tag?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if let c = groupCache, c.filter == key, c.tag == tagKey, c.version == version { return c.value }
 
         let cal = Calendar.current
-        let source: [AtomSnapshot]
+        var source = ordered
         if !key.isEmpty {
-            source = ordered.filter { $0.displayContent.lowercased().contains(key) }
-        } else {
-            source = ordered
+            source = source.filter { $0.displayContent.lowercased().contains(key) }
+        }
+        if !tagKey.isEmpty {
+            source = source.filter { $0.tags.contains { $0.value.lowercased() == tagKey } }
         }
         let buckets = Dictionary(grouping: source) { cal.startOfDay(for: $0.createdAt) }
         let result = buckets.keys.sorted(by: >).map { DayGroup(day: $0, atoms: buckets[$0] ?? []) }
-        groupCache = (key, version, result)
+        groupCache = (key, tagKey, version, result)
         return result
+    }
+
+    /// Called by SyncDaemon when a remote event arrives (Chrome extension, web).
+    /// Folds the event without persisting (already in SwiftData from pull()).
+    func applyRemoteEvent(_ e: NoteEvent) {
+        apply(e, persist: false)
+        rebuildOrdered()
     }
 
     // Convenience
     var taskAtoms: [AtomSnapshot] { ordered.filter { $0.type == .task } }
+    func inboundCount(of id: UUID) -> Int { inboundLinks[id]?.count ?? 0 }
 }

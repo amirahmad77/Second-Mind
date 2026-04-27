@@ -6,6 +6,8 @@ struct SearchSheet: View {
     let supabase: SupabaseClient
     let onDismiss: () -> Void
     let onPickAtom: (AtomSnapshot) -> Void
+    var onPickTag: ((String) -> Void)? = nil
+    var onDelete: ((AtomSnapshot) -> Void)? = nil
 
     @State private var query: String = ""
     @State private var hits: [SearchHit] = []
@@ -92,6 +94,17 @@ struct SearchSheet: View {
                         resultRow(h)
                             .contentShape(Rectangle())
                             .onTapGesture { onPickAtom(h.atom) }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                if let onDelete {
+                                    Button(role: .destructive) {
+                                        onDelete(h.atom)
+                                        hits.removeAll { $0.id == h.id }
+                                    } label: {
+                                        Label("delete", systemImage: "trash")
+                                    }
+                                    .tint(NSColorToken.Phos.orange.opacity(0.85))
+                                }
+                            }
                     }
                 }
             }
@@ -108,9 +121,31 @@ struct SearchSheet: View {
                     .font(NFont.body(15))
                     .foregroundStyle(NSColorToken.textPrimary)
                     .lineLimit(3)
+                if !h.atom.tags.isEmpty { tagStrip(for: h.atom) }
                 Text(metaLine(h.atom))
                     .font(NFont.mono(10))
                     .foregroundStyle(NSColorToken.textTertiary)
+            }
+        }
+    }
+
+    /// Up to 3 tags + (overflow) chip. Tap → filter Stream by tag.
+    private func tagStrip(for atom: AtomSnapshot) -> some View {
+        let visible = atom.tags.prefix(3)
+        let overflow = max(0, atom.tags.count - visible.count)
+        return HStack(spacing: NSpace.sm) {
+            ForEach(Array(visible), id: \.self) { tag in
+                TagChip(value: tag.value, phosphor: atom.type.phosphor, compact: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        Haptics.shared.softTick()
+                        onPickTag?(tag.value)
+                    }
+            }
+            if overflow > 0 {
+                Text("+\(overflow)")
+                    .font(NFont.mono(9))
+                    .foregroundStyle(NSColorToken.textGhost)
             }
         }
     }
@@ -136,7 +171,13 @@ struct SearchSheet: View {
         guard !trimmed.isEmpty else { return }
         do {
             let vec = try await gemini.embed(trimmed)
-            let remoteHits = try await supabase.semanticSearch(queryVector: vec, limit: 20)
+            // Pass `queryText` so server activates PRD §4 keyword-override path
+            // (decay neutralized when tsvector matches the query).
+            let remoteHits = try await supabase.semanticSearch(
+                queryVector: vec,
+                queryText: trimmed,
+                limit: 20
+            )
             // Stale-guard: query may have changed during await.
             guard q == query else { return }
             let merged = mergeHits(local: baseLocal, remote: remoteHits, query: trimmed)
@@ -171,6 +212,16 @@ struct SearchSheet: View {
         return s
     }
 
+    private func titleBoost(_ atom: AtomSnapshot, query: String) -> Double {
+        let title = atom.oneLiner.lowercased()
+        let q = query.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return 0 }
+        if title == q { return 100 }
+        if title.hasPrefix(q) { return 50 }
+        if title.range(of: q, options: .caseInsensitive) != nil { return 25 }
+        return 0
+    }
+
     private func mergeHits(local: [SearchHit], remote: [SupabaseClient.SemanticHit], query: String) -> [SearchHit] {
         var byID = [UUID: SearchHit]()
         for h in local { byID[h.id] = h }
@@ -188,6 +239,15 @@ struct SearchSheet: View {
             if let h = byID[r.atom_id] { out.append(h); used.insert(r.atom_id) }
         }
         for h in local where !used.contains(h.id) { out.append(h) }
-        return out
+        // Stable sort: title-exact/prefix matches float to top, inner order preserved.
+        let q = query
+        return out.enumerated()
+            .sorted { lhs, rhs in
+                let lb = titleBoost(lhs.element.atom, query: q)
+                let rb = titleBoost(rhs.element.atom, query: q)
+                if lb != rb { return lb > rb }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
 }

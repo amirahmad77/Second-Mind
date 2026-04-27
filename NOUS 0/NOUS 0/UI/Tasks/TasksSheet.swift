@@ -66,10 +66,22 @@ struct TasksSheet: View {
                 store.toggleTask(id: a.id)
                 Haptics.shared.softTick()
             } label: {
-                Image(systemName: (a.taskDone ?? false) ? "checkmark.square" : "square")
-                    .foregroundStyle((a.taskDone ?? false) ? NSColorToken.Phos.green : NSColorToken.textTertiary)
-                    .font(.system(size: 16, weight: .regular))
+                ZStack {
+                    Circle()
+                        .strokeBorder(
+                            (a.taskDone ?? false) ? NSColorToken.textGhost : NSColorToken.Phos.green,
+                            lineWidth: 1
+                        )
+                    if a.taskDone ?? false {
+                        Circle()
+                            .fill(NSColorToken.Phos.green.opacity(0.25))
+                            .padding(3)
+                    }
+                }
+                .frame(width: 14, height: 14)
+                .animation(.spring(response: 0.3, dampingFraction: 0.65), value: a.taskDone)
             }
+            .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
                 Text(a.oneLiner)
                     .font(NFont.body(15))
@@ -83,9 +95,35 @@ struct TasksSheet: View {
                 }
             }
             Spacer()
+            dueMenu(for: a)
         }
         .contentShape(Rectangle())
         .onTapGesture { onPickAtom(a) }
+    }
+
+    private func dueMenu(for atom: AtomSnapshot) -> some View {
+        Menu {
+            Button("today") { setDue(for: atom.id, days: 0) }
+            Button("tomorrow") { setDue(for: atom.id, days: 1) }
+            Button("next week") { setDue(for: atom.id, days: 7) }
+            Button("someday") { setDue(for: atom.id, days: 14) }
+            if atom.dueAt != nil {
+                Button("clear deadline") { setDue(atom.id, to: nil) }
+            }
+        } label: {
+            Text(atom.dueAt.map(dueChipText) ?? "set date")
+                .font(NFont.mono(10))
+                .foregroundStyle(atom.dueAt == nil ? NSColorToken.textGhost : NSColorToken.Phos.amber.opacity(0.85))
+                .padding(.horizontal, NSpace.sm)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(atom.dueAt == nil ? NSColorToken.inkMembrane : NSColorToken.Phos.amber.opacity(0.10))
+                )
+                .overlay(
+                    Capsule().stroke(NSColorToken.textGhost.opacity(0.18), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     enum Bucket { case today, week, someday, none }
@@ -113,5 +151,24 @@ struct TasksSheet: View {
     private func dueFmt(_ d: Date) -> String {
         let df = DateFormatter(); df.dateFormat = "MMM d"
         return df.string(from: d).lowercased()
+    }
+
+    private func dueChipText(_ date: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return "today" }
+        if cal.isDateInTomorrow(date) { return "tomorrow" }
+        return dueFmt(date)
+    }
+
+    private func setDue(for id: UUID, days: Int) {
+        let cal = Calendar.current
+        let base = cal.startOfDay(for: .now)
+        let date = cal.date(byAdding: .day, value: days, to: base) ?? base
+        setDue(id, to: date)
+    }
+
+    private func setDue(_ id: UUID, to date: Date?) {
+        store.setDue(id: id, to: date)
+        Haptics.shared.softTick()
     }
 }

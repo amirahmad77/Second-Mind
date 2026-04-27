@@ -3,6 +3,20 @@ import AVFoundation
 import Speech
 import Observation
 
+// VoiceRecorder uses AVAudioSession (iOS/watchOS/tvOS only).
+// On macOS the class compiles as a no-op stub so Mac views can reference it.
+#if os(macOS)
+@MainActor
+@Observable
+final class VoiceRecorder {
+    private(set) var amp: Double = 0
+    private(set) var isRecording = false
+    func start() async {}
+    func stop() async -> String { "" }
+    func cancel() {}
+}
+#else
+
 @MainActor
 @Observable
 final class VoiceRecorder {
@@ -91,3 +105,5 @@ final class VoiceRecorder {
         }
     }
 }
+
+#endif

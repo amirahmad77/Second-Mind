@@ -30,9 +30,12 @@ enum NSpace {
 
 /// Font stack: primary picks if bundled, else graceful fallbacks. All ship-safe.
 enum NFont {
-    // Display (day headers) — serif italic w/ character. Fallback: system serif italic.
+    // Display (day headers) — heavy compressed sans. Signage/silkscreen register
+    // over the old serif-italic, so day markers read like industrial labels on
+    // TE hardware rather than magazine callouts.
     static func dayHeader(_ size: CGFloat = 28) -> Font {
-        Font.system(size: size, weight: .light, design: .serif).italic()
+        Font.system(size: size, weight: .heavy, design: .default)
+            .width(.compressed)
     }
     // Body — humanist. Fallback: system rounded-less default.
     static func body(_ size: CGFloat = 16) -> Font {
@@ -47,6 +50,68 @@ enum NFont {
     }
     static func monoSmall(_ size: CGFloat = 10) -> Font {
         Font.system(size: size, weight: .medium, design: .monospaced)
+    }
+}
+
+// MARK: - Dynamic Type body font
+//
+// Body content (atom prose, capture buffer, headings, list items) must respect
+// the user's iOS text-size preference. Mono chrome labels (// capture, // tag,
+// timestamps) stay fixed so the instrument register doesn't reflow.
+//
+// Apple's `Font.system(size:weight:design:)` does NOT auto-scale — it bakes a
+// hard pt size. We wrap it with a modifier that reads `\.dynamicTypeSize` and
+// multiplies the base by Apple's published body-style scale ratios.
+//
+// Use `.nDynamicBody(17)` instead of `.font(NFont.body(17))` for any text that
+// should scale with the user's accessibility setting.
+
+private struct DynamicSizedFontModifier: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var dts
+    let base: CGFloat
+    let weight: Font.Weight
+    let design: Font.Design
+    let italic: Bool
+
+    func body(content: Content) -> some View {
+        let scaled = base * Self.scale(for: dts)
+        var f = Font.system(size: scaled, weight: weight, design: design)
+        if italic { f = f.italic() }
+        return content.font(f)
+    }
+
+    /// Scale factors approximate Apple's body text-style ratios across the
+    /// 12 Dynamic Type sizes (5 of which are Accessibility sizes that can go
+    /// up to ~3×). Source: Apple HIG Typography.
+    static func scale(for dts: DynamicTypeSize) -> CGFloat {
+        switch dts {
+        case .xSmall:        return 0.82
+        case .small:         return 0.88
+        case .medium:        return 0.94
+        case .large:         return 1.00 // baseline
+        case .xLarge:        return 1.12
+        case .xxLarge:       return 1.23
+        case .xxxLarge:      return 1.35
+        case .accessibility1: return 1.64
+        case .accessibility2: return 1.94
+        case .accessibility3: return 2.35
+        case .accessibility4: return 2.76
+        case .accessibility5: return 3.12
+        @unknown default:    return 1.00
+        }
+    }
+}
+
+extension View {
+    /// Apply a body-style font that scales with Dynamic Type. `base` is the pt
+    /// size at the default `.large` content-size category.
+    func nDynamicBody(
+        _ base: CGFloat,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default,
+        italic: Bool = false
+    ) -> some View {
+        modifier(DynamicSizedFontModifier(base: base, weight: weight, design: design, italic: italic))
     }
 }
 

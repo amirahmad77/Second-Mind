@@ -1,6 +1,45 @@
 import Foundation
 import CoreHaptics
 
+// MARK: - Haptic vocabulary
+//
+// Five intents, five distinct sensations. Apply consistently across the app —
+// users learn the language through repetition, and inconsistency erodes trust.
+//
+// ┌──────────────┬───────────────────────┬───────────────────────────────────┐
+// │ Method       │ When to use           │ What it must NEVER do             │
+// ├──────────────┼───────────────────────┼───────────────────────────────────┤
+// │ tap()        │ Mode entry from idle  │ Mid-flow taps (use softTick)      │
+// │              │ (orb opens capture)   │                                   │
+// ├──────────────┼───────────────────────┼───────────────────────────────────┤
+// │ softTick()   │ Micro-confirmation:   │ Mode change, destruction          │
+// │              │ tag tap, link pick,   │                                   │
+// │              │ filter set, snooze,   │                                   │
+// │              │ checkbox toggle       │                                   │
+// ├──────────────┼───────────────────────┼───────────────────────────────────┤
+// │ heavyThud()  │ Mode change w/ commit │ Routine confirmations             │
+// │              │ weight: voice start,  │                                   │
+// │              │ synthesis open, long- │                                   │
+// │              │ press destruction     │                                   │
+// ├──────────────┼───────────────────────┼───────────────────────────────────┤
+// │ saveConfirm()│ Atom captured / saved │ Edits, toggles                    │
+// │              │ (terminal action of   │                                   │
+// │              │ the capture flow)     │                                   │
+// ├──────────────┼───────────────────────┼───────────────────────────────────┤
+// │ cancelCrash()│ Destructive cancel:   │ Routine dismiss (use no haptic)   │
+// │              │ voice cancelled,      │                                   │
+// │              │ unconfigured backend  │                                   │
+// │              │ blocked an action     │                                   │
+// ├──────────────┼───────────────────────┼───────────────────────────────────┤
+// │ startCont…() │ Voice recording boil  │ Any non-voice continuous          │
+// │ updateCont…  │ (modulated by amp)    │ feedback                          │
+// │ stopCont…    │                       │                                   │
+// └──────────────┴───────────────────────┴───────────────────────────────────┘
+//
+// Rule of thumb: if you find yourself reaching for `softTick` because you want
+// "some feedback" and aren't sure which one fits — use no haptic at all.
+// Silence is a valid choice, and overusing haptics dilutes the vocabulary.
+
 @MainActor
 final class Haptics {
     static let shared = Haptics()

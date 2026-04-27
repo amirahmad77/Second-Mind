@@ -43,16 +43,29 @@ extension NoteEvent {
 }
 
 extension JSONEncoder {
-    static let nous: JSONEncoder = {
+    nonisolated(unsafe) static let nous: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601
         return e
     }()
 }
 extension JSONDecoder {
-    static let nous: JSONDecoder = {
+    nonisolated(unsafe) static let nous: JSONDecoder = {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        // Supabase + backend emit ISO8601 with microsecond precision
+        // (2026-04-21T17:35:14.123456Z). Default `.iso8601` rejects fractional
+        // seconds. Custom strategy tries fractional first, falls back to plain.
+        let withFrac = ISO8601DateFormatter()
+        withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        d.dateDecodingStrategy = .custom { decoder in
+            let s = try decoder.singleValueContainer().decode(String.self)
+            if let d = withFrac.date(from: s) { return d }
+            if let d = plain.date(from: s) { return d }
+            throw DecodingError.dataCorruptedError(in: try decoder.singleValueContainer(),
+                debugDescription: "unrecognized ISO8601: \(s)")
+        }
         return d
     }()
 }
@@ -66,5 +79,9 @@ final class EmbeddingRecord {
     var updatedAt: Date
     init(atomID: UUID, dim: Int, vector: Data, updatedAt: Date = .now) {
         self.atomID = atomID; self.dim = dim; self.vector = vector; self.updatedAt = updatedAt
+    }
+
+    func toFloatArray() -> [Float] {
+        vector.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
 }

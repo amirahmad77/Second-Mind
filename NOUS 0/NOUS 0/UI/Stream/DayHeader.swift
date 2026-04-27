@@ -16,11 +16,14 @@ struct DayHeader: View {
                 .foregroundStyle(NSColorToken.textSecondary)
                 .monospacedDigit()
         }
-        .padding(.top, NSpace.x4)
+        .padding(.top, NSpace.xl)
         .padding(.bottom, NSpace.lg)
     }
 
     private var dayName: String {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return "today" }
+        if cal.isDateInYesterday(date) { return "yesterday" }
         let df = DateFormatter(); df.dateFormat = "EEEE"
         return df.string(from: date).lowercased()
     }

@@ -6,6 +6,7 @@ enum OrbMode: Equatable {
     case voice(amp: Double)
     case voiceCancelZone
     case search
+    case synthesis
     case refining   // ambient indicator (any atom refining in background)
 }
 
@@ -43,6 +44,10 @@ struct OrbVisual {
         case .search:
             return .init(haloColor: NSColorToken.Phos.blue, haloAlpha: 0.26, haloBlur: 56,
                          haloRadius: 120, bodySize: 72, amp: 0.05, phos: NSColorToken.Phos.blue,
+                         breathe: false, label: nil)
+        case .synthesis:
+            return .init(haloColor: NSColorToken.Phos.violet, haloAlpha: 0.28, haloBlur: 56,
+                         haloRadius: 116, bodySize: 70, amp: 0.05, phos: NSColorToken.Phos.violet,
                          breathe: false, label: nil)
         case .refining:
             return .init(haloColor: NSColorToken.Phos.amber, haloAlpha: 0.12, haloBlur: 40,

@@ -14,19 +14,94 @@ final class SyncDaemon {
     private var pendingEmbedIDs: Set<UUID> = []   // dedupe enqueues
     private var embedTask: Task<Void, Never>?     // serialize embed pipeline
 
+    /// Closure invoked on the MainActor for each fresh remote event pulled from
+    /// Supabase. AtomStore wires this to fold remote captures (Chrome extension,
+    /// future web) into its in-memory state.
+    var onRemoteEvent: ((NoteEvent) -> Void)?
+
+    private static let pullCursorKey = "nous.sync.lastPullCursor"
+    static let lastPullAtKey      = "nous.sync.lastPullAt"
+    static let lastPullCountKey   = "nous.sync.lastPullCount"
+    static let lastPullErrorKey   = "nous.sync.lastPullError"
+    static let lastPullUserKey    = "nous.sync.lastPullUserID"
+    private var pulling = false
+
+    /// Force-resync: clears the cursor so the next pull walks the last 30 days
+    /// of events from Supabase. Used when something out-of-band (Chrome
+    /// extension, web) wrote events but the local cursor moved past them.
+    func resetPullCursor() {
+        UserDefaults.standard.removeObject(forKey: Self.pullCursorKey)
+    }
+
+    /// Manual immediate pull. Convenience for a "resync now" Settings button.
+    func pullNowAndWait() async { await pull() }
+
     init(context: ModelContext, supabase: SupabaseClient, gemini: GeminiClient) {
         self.context = context; self.supabase = supabase; self.gemini = gemini
     }
 
     func bootstrap() {
         Task { await drain() }
-        // Periodic drain catches offline → online transitions without NW reachability dep.
+        Task { await pull() }
+        // Periodic drain + pull catches offline → online transitions and surfaces
+        // captures originating outside the device (Chrome extension, future web).
         Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
                 await self?.drain()
+                await self?.pull()
             }
         }
+    }
+
+    /// Manually triggered pull (e.g. on app foreground). Coalesces concurrent calls.
+    func pullNow() { Task { await pull() } }
+
+    private func pull() async {
+        if pulling { return }
+        pulling = true
+        defer {
+            pulling = false
+            UserDefaults.standard.set(Date(), forKey: Self.lastPullAtKey)
+        }
+
+        // Stamp the user_id we're about to query under, so Settings can show
+        // the user whether iOS and the extension are using the same identity.
+        let uid = await AppEnv.currentUserID()
+        UserDefaults.standard.set(uid.uuidString, forKey: Self.lastPullUserKey)
+
+        let cursor = (UserDefaults.standard.object(forKey: Self.pullCursorKey) as? Date)
+            ?? Date(timeIntervalSinceNow: -60 * 60 * 24 * 30) // first run: last 30d
+        let events: [NoteEvent]
+        do { events = try await supabase.fetchEvents(since: cursor, limit: 500) }
+        catch {
+            UserDefaults.standard.set(error.localizedDescription, forKey: Self.lastPullErrorKey)
+            NousLogger.error("sync", "pull failed", ["error": error.localizedDescription])
+            return
+        }
+        UserDefaults.standard.removeObject(forKey: Self.lastPullErrorKey)
+        UserDefaults.standard.set(events.count, forKey: Self.lastPullCountKey)
+        guard !events.isEmpty else { return }
+        NousLogger.info("sync", "pulled \(events.count) remote events")
+
+        var maxCreated = cursor
+        for e in events {
+            if e.createdAt > maxCreated { maxCreated = e.createdAt }
+            // Dedupe by event id — drain() already pushed local events here, the
+            // server echoes them back. Skip if already in SwiftData.
+            let eid = e.id
+            let dupDesc = FetchDescriptor<NoteEventRecord>(predicate: #Predicate { $0.id == eid })
+            let existing = (try? context.fetch(dupDesc)) ?? []
+            if !existing.isEmpty { continue }
+
+            // Persist as already-synced (came from cloud).
+            let rec = NoteEventRecord.from(e)
+            rec.synced = true
+            context.insert(rec)
+            onRemoteEvent?(e)
+        }
+        try? context.save()
+        UserDefaults.standard.set(maxCreated, forKey: Self.pullCursorKey)
     }
 
     func enqueue(_ rec: NoteEventRecord) {
@@ -75,6 +150,7 @@ final class SyncDaemon {
             } catch {
                 // Exponential backoff: 2 → 4 → 8 … capped at 5 min.
                 backoffSeconds = min(maxBackoff, max(2, backoffSeconds * 2))
+                NousLogger.error("sync", "drain push failed, backoff \(backoffSeconds)s", ["error": error.localizedDescription])
                 return
             }
         }
@@ -96,7 +172,7 @@ final class SyncDaemon {
             context.insert(cache)
             try? context.save()
         } catch {
-            // silent
+            NousLogger.error("sync", "embed failed", ["atomID": atomID.uuidString, "error": error.localizedDescription])
         }
     }
 

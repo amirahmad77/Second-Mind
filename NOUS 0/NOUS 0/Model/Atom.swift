@@ -39,10 +39,10 @@ nonisolated struct AtomSnapshot: Identifiable, Hashable, Sendable {
 
     var displayContent: String { refinedContent ?? rawContent }
 
-    /// One-liner for Stream row.
-    var oneLiner: String {
-        let src = displayContent.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let first = src.split(whereSeparator: \.isNewline).first { return String(first) }
-        return src
+    /// One-liner for Stream row. Strips markdown (block prefixes, emphasis,
+    /// wikilink syntax → alias) so the preview reads like plain prose. Body
+    /// formatting belongs in the detail surface, not the row.
+    @MainActor var oneLiner: String {
+        MarkdownInline.plain(displayContent)
     }
 }

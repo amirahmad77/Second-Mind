@@ -362,7 +362,9 @@ struct AtomDetailView: View {
                         .font(NFont.monoSmall(11))
                         .foregroundStyle(NSColorToken.textPrimary)
                         .autocorrectionDisabled()
+                        #if os(iOS) || os(visionOS)
                         .textInputAutocapitalization(.never)
+                        #endif
                         .onSubmit { commitTag() }
                         .padding(.horizontal, NSpace.sm)
                         .padding(.vertical, 5)
@@ -501,7 +503,9 @@ struct AtomDetailView: View {
     private func commitEdit() {
         let buf = editBuffer
         editMode = false
+        #if os(iOS) || os(visionOS)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
         if buf != atom.displayContent { store.updateRaw(id: atom.id, newContent: buf) }
     }
 }

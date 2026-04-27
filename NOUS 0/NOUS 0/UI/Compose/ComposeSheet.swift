@@ -201,8 +201,13 @@ struct ComposeSheet: View {
                 Spacer()
                 if !draftText.isEmpty {
                     Button {
+                        #if os(iOS) || os(visionOS)
                         UIPasteboard.general.string = renderedDraft
                         Haptics.shared.softTick()
+                        #elseif os(macOS)
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(renderedDraft, forType: .string)
+                        #endif
                     } label: {
                         Text("copy")
                             .font(NFont.mono(11))

@@ -85,19 +85,40 @@ final class AuthClient: NSObject {
             throw AuthError.malformedRequest
         }
 
+        NousLogger.info("auth", "signIn start", ["provider": "google"])
+
         let callback: URL = try await withCheckedThrowingContinuation { cont in
             let s = ASWebAuthenticationSession(
                 url: authURL,
                 callbackURLScheme: callbackScheme
             ) { url, err in
-                if let err { cont.resume(throwing: err); return }
-                guard let url else { cont.resume(throwing: AuthError.cancelled); return }
+                if let err {
+                    NousLogger.error("auth", "signIn callback error", ["error": err.localizedDescription])
+                    cont.resume(throwing: err)
+                    return
+                }
+                guard let url else {
+                    NousLogger.error("auth", "signIn cancelled")
+                    cont.resume(throwing: AuthError.cancelled)
+                    return
+                }
+                NousLogger.info("auth", "signIn callback received")
                 cont.resume(returning: url)
             }
             s.presentationContextProvider = self
-            s.prefersEphemeralWebBrowserSession = false // share cookies w/ system Safari
+            // macOS: must use ephemeral session — nous:// scheme is not registered as a
+            // system URL handler, so external-browser mode would silently drop the callback.
+            // Ephemeral mode keeps the webview in-process and intercepts the callback URL
+            // internally before the OS ever sees it.
+            #if os(macOS)
+            s.prefersEphemeralWebBrowserSession = true
+            #else
+            s.prefersEphemeralWebBrowserSession = false // share cookies w/ system Safari on iOS
+            #endif
             self.webAuthSession = s
-            if !s.start() {
+            let started = s.start()
+            NousLogger.info("auth", "signIn session start", ["started": started])
+            if !started {
                 cont.resume(throwing: AuthError.couldNotStart)
             }
         }
@@ -130,6 +151,7 @@ final class AuthClient: NSObject {
             displayName: user.displayName
         )
         persist(s)
+        NousLogger.info("auth", "signIn success", ["user": s.userID.uuidString])
         return s
     }
 
@@ -345,7 +367,12 @@ extension AuthClient: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         #if os(macOS)
         return MainActor.assumeIsolated {
-            NSApplication.shared.keyWindow ?? ASPresentationAnchor()
+            // Prefer the key window; fall back to any visible window; then any window.
+            // keyWindow can be nil briefly after launch or when the app isn't frontmost.
+            NSApplication.shared.keyWindow
+                ?? NSApplication.shared.windows.first(where: { $0.isVisible && !$0.isMiniaturized })
+                ?? NSApplication.shared.windows.first
+                ?? ASPresentationAnchor()
         }
         #else
         // Find the first connected foreground window. iOS 17+ scene-based.

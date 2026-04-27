@@ -142,6 +142,9 @@ struct SignInView: View {
                         lineWidth: 0.5
                     )
             )
+            // macOS: hit-testing defaults to visible pixels only.
+            // contentShape forces the full frame to be tappable.
+            .contentShape(Rectangle())
             .animation(.easeOut(duration: 0.22), value: auth.isSigningIn)
         }
         .buttonStyle(SignInPressStyle())
@@ -194,17 +197,23 @@ struct SignInView: View {
     // MARK: - Logic
 
     private func startSignIn() {
+        #if os(iOS)
         Haptics.shared.softTick()
+        #endif
         Task { @MainActor in
             do {
                 _ = try await auth.signInWithGoogle()
+                #if os(iOS)
                 Haptics.shared.saveConfirm()
+                #endif
                 onSignedIn()
             } catch {
                 let msg = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
                 showError(msg)
+                #if os(iOS)
                 Haptics.shared.cancelCrash()
+                #endif
             }
         }
     }

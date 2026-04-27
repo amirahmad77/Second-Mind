@@ -24,7 +24,9 @@ struct SignInView: View {
 
     var body: some View {
         ZStack {
-            NSColorToken.inkVoid.ignoresSafeArea()
+            NSColorToken.inkVoid
+                .ignoresSafeArea()
+                .allowsHitTesting(false)   // macOS: Color is hittable by default; must opt out
             backdrop
 
             VStack(spacing: 0) {
@@ -197,6 +199,7 @@ struct SignInView: View {
     // MARK: - Logic
 
     private func startSignIn() {
+        NousLogger.info("auth", "signIn button tapped")
         #if os(iOS)
         Haptics.shared.softTick()
         #endif

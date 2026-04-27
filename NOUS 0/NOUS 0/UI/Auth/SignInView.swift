@@ -55,9 +55,26 @@ struct SignInView: View {
         )
         .onAppear {
             #if os(macOS)
-            // Make app frontmost immediately — without this, first click
-            // goes to making the window key rather than hitting the button.
+            // Make app frontmost and window key immediately.
             NSApplication.shared.activate(ignoringOtherApps: true)
+            DispatchQueue.main.async {
+                if let w = NSApplication.shared.keyWindow {
+                    w.makeKeyAndOrderFront(nil)
+                } else {
+                    NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
+                }
+            }
+            // AppKit-level mouse monitor: logs BEFORE SwiftUI gesture system sees the event.
+            // If this fires but button still doesn't respond → SwiftUI gesture layer broken.
+            // If this never fires → NSWindow.ignoresMouseEvents or a covering window.
+            let _ = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+                NousLogger.info("auth", "AppKit mouseDown", [
+                    "x": "\(Int(event.locationInWindow.x))",
+                    "y": "\(Int(event.locationInWindow.y))",
+                    "window": event.window?.identifier?.rawValue ?? "nil"
+                ])
+                return event  // always propagate — never swallow
+            }
             #endif
             withAnimation(.timingCurve(0.23, 1.0, 0.32, 1.0, duration: 0.42)) {
                 wordmarkVisible = true
@@ -126,10 +143,12 @@ struct SignInView: View {
     private var googleButton: some View {
         googleButtonLabel
             #if os(macOS)
-            // On macOS SwiftUI Button machinery has persistent hit-testing issues
-            // in certain window configurations. onTapGesture on the label is guaranteed
-            // to fire regardless of button style, window focus state, or background layers.
-            .onTapGesture { if !auth.isSigningIn { startSignIn() } }
+            // On macOS, SwiftUI gestures can silently fail on non-key windows:
+            // the first click "activates" the window and is consumed before SwiftUI
+            // ever sees it. We overlay a transparent AppKit NSView whose mouseDown
+            // fires unconditionally — including on that focus click — bypassing
+            // the SwiftUI hit-testing and gesture pipeline entirely.
+            .overlay(MacClickOverlay { if !auth.isSigningIn { startSignIn() } })
             #else
             .overlay(Button("") { startSignIn() }
                 .buttonStyle(SignInPressStyle())
@@ -257,6 +276,43 @@ struct SignInView: View {
         }
     }
 }
+
+// MARK: - macOS click overlay
+
+#if os(macOS)
+/// Transparent AppKit overlay that intercepts mouse events before SwiftUI's
+/// gesture system. Critical on macOS: SwiftUI `onTapGesture` / `Button` don't
+/// fire on the "focus click" (the first click that activates a non-key window).
+/// Overriding `acceptsFirstMouse` + handling `mouseDown` at the NSView level
+/// makes the first click actionable immediately, matching iOS behavior.
+private struct MacClickOverlay: NSViewRepresentable {
+    var onTap: () -> Void
+
+    func makeNSView(context: Context) -> ClickCaptureView {
+        let v = ClickCaptureView()
+        v.onTap = onTap
+        return v
+    }
+
+    func updateNSView(_ nsView: ClickCaptureView, context: Context) {
+        nsView.onTap = onTap
+    }
+
+    class ClickCaptureView: NSView {
+        var onTap: (() -> Void)?
+
+        /// Return true so the first click on an inactive window triggers the
+        /// action immediately rather than just bringing the window to front.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            super.mouseDown(with: event)
+            NousLogger.info("auth", "MacClickOverlay mouseDown fired")
+            onTap?()
+        }
+    }
+}
+#endif
 
 // MARK: - Press style
 

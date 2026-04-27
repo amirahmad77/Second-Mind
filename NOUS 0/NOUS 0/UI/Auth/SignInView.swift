@@ -111,47 +111,54 @@ struct SignInView: View {
     // MARK: - Google button
 
     private var googleButton: some View {
-        Button {
-            startSignIn()
-        } label: {
-            HStack(spacing: NSpace.md) {
-                if auth.isSigningIn {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(NSColorToken.Phos.cyan)
-                } else {
-                    GoogleGlyph()
-                        .frame(width: 18, height: 18)
-                }
-                Text(auth.isSigningIn ? "// opening browser…" : "continue with Google")
-                    .font(auth.isSigningIn
-                          ? NFont.mono(13)
-                          : NFont.body(15))
-                    .foregroundStyle(auth.isSigningIn
-                                     ? NSColorToken.Phos.cyan
-                                     : NSColorToken.textPrimary)
-                    .contentTransition(.opacity)
+        googleButtonLabel
+            #if os(macOS)
+            // On macOS SwiftUI Button machinery has persistent hit-testing issues
+            // in certain window configurations. onTapGesture on the label is guaranteed
+            // to fire regardless of button style, window focus state, or background layers.
+            .onTapGesture { if !auth.isSigningIn { startSignIn() } }
+            #else
+            .overlay(Button("") { startSignIn() }
+                .buttonStyle(SignInPressStyle())
+                .disabled(auth.isSigningIn)
+                .opacity(0))
+            .onTapGesture { if !auth.isSigningIn { startSignIn() } }
+            #endif
+            .padding(.bottom, NSpace.md)
+    }
+
+    private var googleButtonLabel: some View {
+        HStack(spacing: NSpace.md) {
+            if auth.isSigningIn {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(NSColorToken.Phos.cyan)
+            } else {
+                GoogleGlyph()
+                    .frame(width: 18, height: 18)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
-            .background(NSColorToken.inkRaised)
-            .overlay(
-                Rectangle()
-                    .stroke(
-                        auth.isSigningIn
-                            ? NSColorToken.Phos.cyan.opacity(0.55)
-                            : NSColorToken.textGhost.opacity(0.45),
-                        lineWidth: 0.5
-                    )
-            )
-            // macOS: hit-testing defaults to visible pixels only.
-            // contentShape forces the full frame to be tappable.
-            .contentShape(Rectangle())
-            .animation(.easeOut(duration: 0.22), value: auth.isSigningIn)
+            Text(auth.isSigningIn ? "// opening browser…" : "continue with Google")
+                .font(auth.isSigningIn ? NFont.mono(13) : NFont.body(15))
+                .foregroundStyle(auth.isSigningIn
+                                 ? NSColorToken.Phos.cyan
+                                 : NSColorToken.textPrimary)
+                .contentTransition(.opacity)
         }
-        .buttonStyle(SignInPressStyle())
-        .disabled(auth.isSigningIn)
-        .padding(.bottom, NSpace.md)
+        .frame(maxWidth: .infinity)
+        .frame(height: 52)
+        .background(NSColorToken.inkRaised)
+        .overlay(
+            Rectangle()
+                .stroke(
+                    auth.isSigningIn
+                        ? NSColorToken.Phos.cyan.opacity(0.55)
+                        : NSColorToken.textGhost.opacity(0.45),
+                    lineWidth: 0.5
+                )
+        )
+        .contentShape(Rectangle())
+        .animation(.easeOut(duration: 0.22), value: auth.isSigningIn)
+        .opacity(auth.isSigningIn ? 0.75 : 1.0)
     }
 
     private var versionLabel: some View {
@@ -200,6 +207,11 @@ struct SignInView: View {
 
     private func startSignIn() {
         NousLogger.info("auth", "signIn button tapped")
+        #if os(macOS)
+        // Ensure app is frontmost before ASWebAuthenticationSession.start()
+        // A non-key window causes the session to silently refuse to present.
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        #endif
         #if os(iOS)
         Haptics.shared.softTick()
         #endif

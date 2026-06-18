@@ -44,9 +44,23 @@ final class MeetBridgeServer {
     // Without it, any local process (or a DNS-rebinding / CSRF-style web page)
     // could connect to the bridge. Exposed read-only so the pairing flow can
     // hand it to the extension.
-    private let authToken = UUID().uuidString
+    private let authToken = MeetBridgeServer.loadOrCreateToken()
     /// Read-only accessor for the pairing flow to deliver to the extension.
     var pairingToken: String { authToken }
+
+    private static let tokenDefaultsKey = "nous.bridge.pairingToken"
+    /// Stable per-install bridge token, persisted in UserDefaults so the
+    /// extension pairs ONCE rather than re-pairing on every app launch.
+    /// Generated lazily on first read.
+    static func loadOrCreateToken() -> String {
+        let d = UserDefaults.standard
+        if let existing = d.string(forKey: tokenDefaultsKey), !existing.isEmpty { return existing }
+        let token = UUID().uuidString
+        d.set(token, forKey: tokenDefaultsKey)
+        return token
+    }
+    /// Token for the pairing UI without needing the running server instance.
+    static var persistedPairingToken: String { loadOrCreateToken() }
 
     // ── Start / Stop ───────────────────────────────────────────────────────
 

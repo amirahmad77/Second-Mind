@@ -241,6 +241,12 @@ struct AtomDetailView: View {
                     .padding(.horizontal, NSpace.xl)
                     .padding(.top, NSpace.xl)
 
+                if !duplicateCandidates.isEmpty {
+                    duplicateBanner
+                        .padding(.horizontal, NSpace.xl)
+                        .padding(.top, NSpace.xl)
+                }
+
                 tagBlock
                     .padding(.horizontal, NSpace.xl)
                     .padding(.top, NSpace.xxxl)
@@ -503,6 +509,116 @@ struct AtomDetailView: View {
         .accessibilityLabel(atom.taskDone == true ? "Task complete" : "Task open")
         .accessibilityHint("Double-tap to toggle task status")
         .accessibilityAddTraits(atom.taskDone == true ? .isSelected : [])
+    }
+
+    // MARK: – Near-duplicate banner
+
+    /// Resolves the store's near-duplicate ids → live snapshots, dropping any that
+    /// vanished (deleted/merged) since detection. Derived, never stored, so the banner
+    /// updates reactively as `store.duplicateSuggestions` changes.
+    private var duplicateCandidates: [AtomSnapshot] {
+        (store.duplicateSuggestions[atom.id] ?? []).compactMap { id in
+            guard let a = store.atoms[id], !a.isDeleted else { return nil }
+            return a
+        }
+    }
+
+    /// Unobtrusive amber-accented section: surfaces possible duplicates inline (not a
+    /// modal). Each candidate offers tap-to-open (reuses the related-open path), merge,
+    /// and dismiss. Mono type + Phos.amber matches the file's chip/banner idioms.
+    private var duplicateBanner: some View {
+        VStack(alignment: .leading, spacing: NSpace.sm) {
+            HStack(spacing: 5) {
+                Image(systemName: "rectangle.on.rectangle")
+                    .font(.system(size: 8.5, weight: .light))
+                    .foregroundStyle(NSColorToken.Phos.amber.opacity(0.70))
+                Text(duplicateCandidates.count == 1 ? "possible duplicate" : "possible duplicates")
+                    .font(NFont.mono(9))
+                    .foregroundStyle(NSColorToken.Phos.amber.opacity(0.70))
+                    .tracking(2.0)
+                    .textCase(.uppercase)
+            }
+
+            ForEach(duplicateCandidates) { candidate in
+                duplicateRow(candidate)
+            }
+        }
+        .padding(NSpace.md)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(NSColorToken.Phos.amber.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(NSColorToken.Phos.amber.opacity(0.20), lineWidth: 0.5)
+        )
+        // Subtle entrance; reduce-motion collapses to a plain crossfade.
+        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+        .animation(reduceMotion ? .nEaseInOutQuint : .nEaseOutQuint, value: duplicateCandidates.map(\.id))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func duplicateRow(_ candidate: AtomSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: NSpace.sm) {
+            // Tap the text to open the candidate — reuses the related-open path.
+            Button(action: { onPickRelated?(candidate) }) {
+                HStack(spacing: NSpace.xs) {
+                    AtomDot(type: candidate.type, size: 5)
+                    Text(candidate.oneLiner)
+                        .font(NFont.body(13))
+                        .foregroundStyle(NSColorToken.textSecondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Possible duplicate: \(candidate.oneLiner)")
+            .accessibilityHint("Double-tap to open")
+
+            HStack(spacing: NSpace.sm) {
+                Button(action: {
+                    withAnimation(reduceMotion ? .nEaseInOutQuint : .nEaseOutQuint) {
+                        store.mergeDuplicate(keep: atom.id, drop: candidate.id)
+                    }
+                    Haptics.shared.softTick()
+                }) {
+                    Text("merge")
+                        .font(NFont.mono(10))
+                        .foregroundStyle(NSColorToken.Phos.amber)
+                        .tracking(1.0)
+                        .padding(.horizontal, NSpace.sm)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(NSColorToken.Phos.amber.opacity(0.10))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Merge duplicate into this atom")
+                .accessibilityHint("Combines the duplicate's text into this atom and removes the duplicate")
+
+                Button(action: {
+                    withAnimation(reduceMotion ? .nEaseInOutQuint : .nEaseOutQuint) {
+                        store.dismissDuplicate(for: atom.id, other: candidate.id)
+                    }
+                }) {
+                    Text("dismiss")
+                        .font(NFont.mono(10))
+                        .foregroundStyle(NSColorToken.textGhostDim)
+                        .tracking(1.0)
+                        .padding(.horizontal, NSpace.sm)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss duplicate suggestion")
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: – Tag block

@@ -496,6 +496,11 @@ final class AtomStore {
                 // Uses the refined text (richer signal) so candidate matching is better.
                 // Never blocks or fails refine — failures log and leave suggestions empty.
                 self.fetchLinkSuggestions(for: id, text: result.refined)
+                // Near-duplicate detection — runs after refine in a separate detached
+                // task so it never extends the refine path or blocks the MainActor.
+                // Depends on the atom's embedding existing; if it isn't cached yet the
+                // pass simply finds nothing and can be re-run later from the detail view.
+                Task { [weak self] in await self?.detectDuplicates(for: id) }
                 // R9 — meeting → action-item tasks. The atom's effective type after this
                 // refine is the detected type if present, else its pre-refine type.
                 let finalType = result.type ?? (self.atoms[id]?.type ?? atomType)
@@ -676,6 +681,157 @@ final class AtomStore {
 
     func dismissSuggestion(for atomID: UUID, target: UUID) {
         linkSuggestions[atomID]?.removeAll { $0.target == target }
+    }
+
+    // MARK: - Near-duplicate detection
+
+    /// Cosine similarity at/above which two atoms are treated as near-duplicates.
+    /// Deliberately high (0.90) — link suggestions use 0.55 for "related"; duplicates
+    /// must be essentially the same thought to avoid noisy false positives.
+    private static let duplicateThreshold: Float = 0.90
+    /// Cap on candidate vectors scanned per detection pass. Keeps the off-main
+    /// compute cheap on large stores; newest atoms are the likeliest dup sources.
+    private static let duplicateCandidateCap = 400
+    /// Max near-duplicate suggestions surfaced per atom.
+    private static let maxDuplicateSuggestions = 3
+
+    /// atom → near-duplicate atom ids (highest similarity first). Populated by
+    /// `detectDuplicates(for:)` after a refine completes. Transient (never persisted);
+    /// rebuilt on demand. Empty / missing entry means "no duplicates known".
+    private(set) var duplicateSuggestions: [UUID: [UUID]] = [:]
+
+    /// Atom pairs the user has explicitly dismissed as not-duplicates, so a later
+    /// re-detection doesn't resurface them. Keyed by the unordered pair (both
+    /// directions inserted) "\(a)|\(b)". Transient — session-scoped, mirrors the
+    /// in-memory nature of the suggestions themselves.
+    private var dismissedDuplicatePairs: Set<String> = []
+
+    private static func duplicatePairKey(_ a: UUID, _ b: UUID) -> String {
+        a.uuidString < b.uuidString ? "\(a.uuidString)|\(b.uuidString)"
+                                    : "\(b.uuidString)|\(a.uuidString)"
+    }
+
+    /// Detects near-duplicate atoms of `id` by cosine similarity over cached
+    /// embeddings, then populates `duplicateSuggestions[id]`.
+    ///
+    /// Mirrors `RelatedFinder`: the MainActor only fetches `EmbeddingRecord`s and
+    /// builds Sendable value snapshots (`[Float]` + `[(UUID, [Float])]`); the
+    /// O(n·dim) cosine math runs in a detached task so it never blocks the MainActor.
+    /// `EmbeddingRecord` (a SwiftData `@Model`) and `AtomStore` never cross the
+    /// actor boundary.
+    ///
+    /// Cheap by construction: candidates are capped, deleted/already-linked atoms
+    /// and user-dismissed pairs are excluded. Safe to call repeatedly. Never throws,
+    /// never blocks refine — failures leave the existing suggestions untouched.
+    func detectDuplicates(for id: UUID) async {
+        guard let source = atoms[id], !source.isDeleted else { return }
+
+        let descriptor = FetchDescriptor<EmbeddingRecord>()
+        let allRecords = (try? context.fetch(descriptor)) ?? []
+        guard let sourceRecord = allRecords.first(where: { $0.atomID == id }) else { return }
+        let sourceVec = sourceRecord.toFloatArray()
+        guard !sourceVec.isEmpty else { return }
+
+        // Targets `id` already links to: inboundLinks[target] holds the SOURCE ids
+        // linking to `target`, so any key whose set contains `id` is already linked.
+        let alreadyLinkedTargets = Set(inboundLinks.filter { $0.value.contains(id) }.keys)
+
+        // Build a Sendable candidate snapshot on the MainActor. Newest-first so the
+        // cap keeps the most likely duplicate sources. Excludes self, deleted/missing
+        // atoms, already-linked targets, and user-dismissed pairs.
+        let candidates: [(UUID, [Float])] = allRecords
+            .compactMap { record -> (UUID, [Float], Date)? in
+                let other = record.atomID
+                guard other != id,
+                      let atom = atoms[other], !atom.isDeleted,
+                      !alreadyLinkedTargets.contains(other),
+                      !dismissedDuplicatePairs.contains(Self.duplicatePairKey(id, other))
+                else { return nil }
+                return (other, record.toFloatArray(), atom.createdAt)
+            }
+            .sorted { $0.2 > $1.2 }
+            .prefix(Self.duplicateCandidateCap)
+            .map { ($0.0, $0.1) }
+
+        guard !candidates.isEmpty else {
+            duplicateSuggestions[id] = []
+            return
+        }
+
+        let threshold = Self.duplicateThreshold
+        let maxResults = Self.maxDuplicateSuggestions
+        let matchedIDs: [UUID] = await Task.detached(priority: .utility) {
+            candidates
+                .compactMap { candidate -> (UUID, Float)? in
+                    let (uuid, vec) = candidate
+                    guard vec.count == sourceVec.count else { return nil }
+                    let sim = RelatedFinder.cosineSimilarity(sourceVec, vec)
+                    return sim >= threshold ? (uuid, sim) : nil
+                }
+                .sorted { $0.1 > $1.1 }
+                .prefix(maxResults)
+                .map(\.0)
+        }.value
+
+        // Back on the MainActor: re-validate (atoms may have changed during compute).
+        let valid = matchedIDs.filter { atoms[$0]?.isDeleted == false }
+        duplicateSuggestions[id] = valid
+        if !valid.isEmpty {
+            NousLogger.info("store", "near-duplicates detected",
+                            ["id": id.uuidString, "count": "\(valid.count)"])
+        }
+    }
+
+    /// Removes a single near-duplicate suggestion and remembers the pair as dismissed
+    /// so re-detection won't resurface it this session.
+    func dismissDuplicate(for id: UUID, other: UUID) {
+        dismissedDuplicatePairs.insert(Self.duplicatePairKey(id, other))
+        duplicateSuggestions[id]?.removeAll { $0 == other }
+        NousLogger.info("store", "near-duplicate dismissed",
+                        ["id": id.uuidString, "other": other.uuidString])
+    }
+
+    /// Conservatively merges two near-duplicate atoms, keeping `keep` and soft-deleting
+    /// `drop`. Reversible-ish: `drop` is soft-deleted (a `.deleted` event), never hard
+    /// removed, so its history survives in the ledger.
+    ///
+    /// Steps (all event-sourced):
+    ///   1. Append `drop`'s display content to `keep`'s raw content as a new
+    ///      `.updatedRaw` event (so the merged text re-refines naturally).
+    ///   2. Write a `.linked` from `keep` → `drop` for provenance.
+    ///   3. Soft-`delete(id: drop)`.
+    ///
+    /// Loop-safe: no-ops on invalid input (missing atom, same id, already-deleted),
+    /// and clears any cross-suggestions between the pair so the banner can't re-fire.
+    func mergeDuplicate(keep: UUID, drop: UUID) {
+        guard keep != drop else { return }
+        guard let keepAtom = atoms[keep], !keepAtom.isDeleted else { return }
+        guard let dropAtom = atoms[drop], !dropAtom.isDeleted else { return }
+
+        // 1. Append the dropped atom's content to the kept atom's raw text. The
+        //    `.updatedRaw` fold sets isRefining=true and (when auto-refine is on)
+        //    re-refines the combined text. updateRaw normalizes + dedupes no-ops.
+        let dropText = dropAtom.displayContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !dropText.isEmpty {
+            let merged = keepAtom.rawContent + "\n\n---\n\n" + dropText
+            updateRaw(id: keep, newContent: merged)
+        }
+
+        // 2. Provenance link keep → drop (the dropped atom remains reachable).
+        let linkEv = NoteEvent(atomID: keep, kind: .linked,
+                               payload: .init(linkTargetID: drop, linkKind: "merged-duplicate"))
+        apply(linkEv, persist: true)
+
+        // 3. Soft-delete the dropped atom.
+        delete(id: drop)
+
+        // Clear any suggestions between the pair so the UI can't re-offer the merge.
+        duplicateSuggestions[keep]?.removeAll { $0 == drop }
+        duplicateSuggestions[drop] = []
+        dismissedDuplicatePairs.insert(Self.duplicatePairKey(keep, drop))
+
+        NousLogger.info("store", "near-duplicates merged",
+                        ["keep": keep.uuidString, "drop": drop.uuidString])
     }
 
     // MARK: - Stream grouping

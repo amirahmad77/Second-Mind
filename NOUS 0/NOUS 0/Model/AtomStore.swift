@@ -67,11 +67,16 @@ final class AtomStore {
         // B4 — exclude atoms the user intentionally reverted to raw. The empty `.refined`
         // sentinel is replayed during the fold above (populating revertedAtoms) BEFORE this
         // loop runs, so the revert stays sticky across relaunch.
-        for atom in atoms.values where !atom.isRefining && !atom.isDeleted
-                                    && atom.refinedContent == nil
-                                    && atom.rawContent.count >= 8
-                                    && !revertedAtoms.contains(atom.id) {
-            startRefine(id: atom.id, raw: atom.rawContent)
+        // R8 — skip this recovery pass when auto-refine is off: an atom captured with
+        // refine disabled is intentionally unrefined, not an interrupted job. (The
+        // isRefining-recovery loop above still runs — those atoms had refine in flight.)
+        if Self.isAutoRefineEnabled {
+            for atom in atoms.values where !atom.isRefining && !atom.isDeleted
+                                        && atom.refinedContent == nil
+                                        && atom.rawContent.count >= 8
+                                        && !revertedAtoms.contains(atom.id) {
+                startRefine(id: atom.id, raw: atom.rawContent)
+            }
         }
         // Rewrite any pre-auth events to the signed-in user_id so they sync to
         // other devices. No-op if user not yet signed in or migration already ran.
@@ -114,15 +119,29 @@ final class AtomStore {
     /// Meeting transcripts can reach 200KB+ for 2-hour sessions; 256KB covers that.
     static let maxCaptureBytes = 256 * 1024
 
+    /// R8 — auto-refine toggle (Settings). Missing key reads as TRUE (refine on by default).
+    private static var isAutoRefineEnabled: Bool {
+        let key = "nous.settings.autoRefine"
+        return UserDefaults.standard.object(forKey: key) == nil
+            || UserDefaults.standard.bool(forKey: key)
+    }
+
     @discardableResult
     func capture(raw: String, type: AtomType = .thought) -> AtomSnapshot? {
         let normalized = Self.normalize(raw)
         guard !normalized.isEmpty else { return nil }
         let id = UUID()
         let ev = NoteEvent(atomID: id, kind: .created, payload: .init(content: normalized, type: type))
-        apply(ev, persist: true)
+        apply(ev, persist: true)   // .created fold sets isRefining = true
         rebuildOrdered()
-        startRefine(id: id, raw: normalized)
+        if Self.isAutoRefineEnabled {
+            startRefine(id: id, raw: normalized)
+        } else {
+            // Auto-refine off: clear the shimmer the .created fold set so the row
+            // isn't stuck shimmering forever. The atom stays unrefined; the user
+            // can trigger refine manually via refineNow(id:).
+            clearRefiningFlag(id: id)
+        }
         return atoms[id]
     }
 
@@ -131,8 +150,40 @@ final class AtomStore {
         guard !normalized.isEmpty else { return }
         guard atoms[id]?.rawContent != normalized else { return }
         let ev = NoteEvent(atomID: id, kind: .updatedRaw, payload: .init(content: normalized))
-        apply(ev, persist: true)
-        startRefine(id: id, raw: normalized)
+        apply(ev, persist: true)   // .updatedRaw fold sets isRefining = true
+        if Self.isAutoRefineEnabled {
+            startRefine(id: id, raw: normalized)
+        } else {
+            clearRefiningFlag(id: id)
+        }
+    }
+
+    /// R8 — public manual trigger for the Settings/atom "refine" button. Re-queues the
+    /// Gemini refine job against the atom's current raw content regardless of the
+    /// auto-refine setting. Restores the shimmer so the UI reflects in-flight work.
+    func refineNow(id: UUID) {
+        guard let a = atoms[id], !a.isDeleted else { return }
+        refineFailures[id] = 0
+        setRefiningFlag(id: id, refining: true)
+        NousLogger.info("store", "manual refineNow", ["id": id.uuidString])
+        startRefine(id: id, raw: a.rawContent)
+    }
+
+    /// Clears the transient `isRefining` shimmer in-memory (never persisted). Used when
+    /// auto-refine is off so a freshly-captured atom doesn't shimmer indefinitely.
+    private func clearRefiningFlag(id: UUID) {
+        setRefiningFlag(id: id, refining: false)
+    }
+
+    private func setRefiningFlag(id: UUID, refining: Bool) {
+        guard var a = atoms[id], a.isRefining != refining else { return }
+        a.isRefining = refining
+        atoms[id] = a
+        if let idx = ordered.firstIndex(where: { $0.id == id }) {
+            ordered[idx].isRefining = refining
+        }
+        version &+= 1
+        groupCache = nil
     }
 
     private static func normalize(_ s: String) -> String {
@@ -445,6 +496,12 @@ final class AtomStore {
                 // Uses the refined text (richer signal) so candidate matching is better.
                 // Never blocks or fails refine — failures log and leave suggestions empty.
                 self.fetchLinkSuggestions(for: id, text: result.refined)
+                // R9 — meeting → action-item tasks. The atom's effective type after this
+                // refine is the detected type if present, else its pre-refine type.
+                let finalType = result.type ?? (self.atoms[id]?.type ?? atomType)
+                if finalType == .meeting {
+                    self.extractMeetingActionItems(for: id, refined: result.refined)
+                }
             } catch {
                 NousLogger.error("store", "startRefine failed", ["id": id.uuidString, "error": error.localizedDescription])
                 let failures = (self.refineFailures[id] ?? 0) + 1
@@ -486,6 +543,58 @@ final class AtomStore {
         groupCache = nil
         NousLogger.info("store", "manual refine retry", ["id": id.uuidString])
         startRefine(id: id, raw: a.rawContent)
+    }
+
+    // MARK: - R9 Meeting action items
+
+    /// R9 — fire-and-forget extraction of action items from a refined meeting, creating
+    /// a linked `.task` atom for each. Runs only when Gemini is reachable (resolvedKey
+    /// gate inside `extractActionItems` makes it a clean no-op otherwise). Never blocks
+    /// or fails refine — failures log and leave the meeting untouched.
+    private func extractMeetingActionItems(for sourceID: UUID, refined: String) {
+        let trimmed = refined.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let items: [String]
+            do {
+                items = try await self.gemini.extractActionItems(from: trimmed)
+            } catch {
+                NousLogger.warning("store", "extractActionItems failed",
+                                   ["id": sourceID.uuidString, "error": error.localizedDescription])
+                return
+            }
+            guard !items.isEmpty else { return }
+            // Guard against re-running on an atom that's been deleted while the call ran.
+            guard self.atoms[sourceID]?.isDeleted == false else { return }
+            for item in items {
+                self.createLinkedTask(from: sourceID, text: item)
+            }
+            NousLogger.info("store", "meeting action items created",
+                            ["source": sourceID.uuidString, "count": "\(items.count)"])
+        }
+    }
+
+    /// R9 — creates a `.task` atom from an extracted action item and links it back to
+    /// its source meeting. The task is built via events directly (`.created`) and
+    /// `startRefine` is NEVER called for it, so a generated task cannot itself trigger
+    /// another extraction pass — this is the loop-prevention guarantee. The `.created`
+    /// fold sets isRefining=true, so we immediately clear the shimmer (no refine follows).
+    func createLinkedTask(from sourceID: UUID, text: String) {
+        let normalized = Self.normalize(text)
+        guard !normalized.isEmpty else { return }
+        let taskID = UUID()
+        // Create the task atom WITHOUT triggering refine (loop prevention).
+        let createEv = NoteEvent(atomID: taskID, kind: .created,
+                                 payload: .init(content: normalized, type: .task))
+        apply(createEv, persist: true)
+        // The .created fold set isRefining=true; clear it (no refine job is queued).
+        clearRefiningFlag(id: taskID)
+        // Link source meeting → new task.
+        let linkEv = NoteEvent(atomID: sourceID, kind: .linked,
+                               payload: .init(linkTargetID: taskID, linkKind: "action-item"))
+        apply(linkEv, persist: true)
+        rebuildOrdered()
     }
 
     /// Manual type override from the detail view.

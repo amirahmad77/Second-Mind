@@ -139,6 +139,11 @@ struct NOUS_0App: App {
             MacMenuBarContent(auth: auth)
         }
         .menuBarExtraStyle(.window)
+
+        // Settings scene — opens via the standard ⌘, shortcut.
+        Settings {
+            SettingsView()
+        }
     }
 
     @CommandsBuilder

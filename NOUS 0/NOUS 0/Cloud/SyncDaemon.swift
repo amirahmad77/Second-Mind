@@ -135,8 +135,22 @@ final class SyncDaemon {
         return id
     }
 
+    /// R8 — user-controlled sync pause. When true, `drain()` returns before pushing
+    /// so events stay queued/persisted locally (never dropped) and resume pushing
+    /// once cleared. Default false (missing key reads as false).
+    private static var isSyncPaused: Bool {
+        UserDefaults.standard.bool(forKey: "nous.settings.syncPaused")
+    }
+
     private func drain() async {
         if draining { return }
+        // R8 — honor the pause switch. Reentrancy/backoff state is left untouched so
+        // the next unpaused drain resumes exactly where it left off. Queued events
+        // remain unsynced in SwiftData; nothing is dropped.
+        if Self.isSyncPaused {
+            NousLogger.debug("sync", "drain skipped — sync paused")
+            return
+        }
         if backoffSeconds > 0 {
             try? await Task.sleep(nanoseconds: backoffSeconds * 1_000_000_000)
         }

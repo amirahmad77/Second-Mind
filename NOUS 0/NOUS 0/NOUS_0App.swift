@@ -1,5 +1,9 @@
 import SwiftUI
 import SwiftData
+import CoreText
+#if os(macOS)
+import CoreGraphics
+#endif
 #if os(iOS) || os(visionOS)
 import CoreSpotlight
 import UserNotifications
@@ -20,6 +24,17 @@ struct NOUS_0App: App {
     #endif
 
     init() {
+        // Register bundled fonts before any SwiftUI view body runs so
+        // Font.custom("DepartureMono-Regular", ...) resolves on first use.
+        // On iOS this is redundant (UIAppFonts handles it) but harmless.
+        // On macOS (sandbox) ATSApplicationFontsPath doesn't work — CTFontManager
+        // is the only reliable registration path.
+        NFont.registerBundledFonts()
+
+        // Evict any API keys that were cached in UserDefaults by earlier builds.
+        // AppEnv.string(for:) no longer reads UserDefaults, but stale values
+        // sitting there can cause confusion — purge them once on every launch.
+        AppEnv.purgeStaleUserDefaultsKeys()
         seedDefaults()
         #if os(macOS)
         // On macOS 26 (Tahoe), apps that have a MenuBarExtra scene can be
@@ -31,6 +46,10 @@ struct NOUS_0App: App {
         // fully interactive from first click.
         NSApplication.shared.setActivationPolicy(.regular)
         MacGlobalHotkey.register()
+        // Request Screen Recording permission early (needed for ScreenCaptureKit
+        // system-audio capture during meetings). Shows the system prompt on first
+        // launch; subsequent launches are silently granted.
+        CGRequestScreenCaptureAccess()
         #else
         UNUserNotificationCenter.current().delegate = ProactiveNotificationDelegate.shared
         #endif
@@ -47,16 +66,18 @@ struct NOUS_0App: App {
     // MARK: – Secrets seeding
 
     private func seedDefaults() {
+        // API keys (NOUS_*_KEY) are NOT seeded here — they come from
+        // LocalSecrets.xcconfig → Info.plist → Secrets.swift at build time.
+        // Seeding them into UserDefaults caused stale expired keys to survive
+        // across rebuilds because the guard below never updates existing values.
+        //
+        // Only seed non-secret config that legitimately lives in UserDefaults.
         let ud = UserDefaults.standard
         func seed(_ key: String, _ value: String) {
             guard !value.isEmpty,
                   (ud.string(forKey: key) ?? "").isEmpty else { return }
             ud.set(value, forKey: key)
         }
-        seed("NOUS_GEMINI_API_KEY",    Secrets.geminiAPIKey)
-        seed("NOUS_SUPABASE_ANON_KEY", Secrets.supabaseAnonKey)
-        seed("NOUS_BACKEND_URL",       Secrets.nousBackendURL)
-        seed("NOUS_AXIOM_TOKEN",       Secrets.axiomToken)
         seed("NOUS_AXIOM_DATASET",     Secrets.axiomDataset)
         seed("NOUS_AXIOM_URL",         Secrets.axiomURL)
     }
@@ -127,6 +148,11 @@ struct NOUS_0App: App {
                 NotificationCenter.default.post(name: .nousOpenCapture, object: nil)
             }
             .keyboardShortcut("n", modifiers: .command)
+
+            Button("Command Palette") {
+                NotificationCenter.default.post(name: .nousOpenPalette, object: nil)
+            }
+            .keyboardShortcut("k", modifiers: .command)
         }
     }
     #endif

@@ -25,6 +25,14 @@ struct MacAtomList: View {
     @Binding var selectedAtomID: UUID?
     let onDelete: (AtomSnapshot) -> Void
 
+    // ─── Multi-select / bulk layer (ADDITIVE — local to MacAtomList) ──────────
+    // The single-selection detail binding (`selectedAtomID`, owned by MacRootView)
+    // is never mutated by this layer. Bulk mode is a separate interaction surface.
+    @State private var bulkMode: Bool = false
+    @State private var bulkSelection: Set<UUID> = []
+    @State private var bulkTagDraft: String = ""
+    @FocusState private var bulkTagFocused: Bool
+
     var body: some View {
         VStack(spacing: 0) {
             // Search bar — always visible, filters inline
@@ -43,8 +51,19 @@ struct MacAtomList: View {
             } else {
                 listBody
             }
+
+            // Bulk action bar — slides up when a selection exists
+            if bulkMode && !bulkSelection.isEmpty {
+                bulkActionBar
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .background(NSColorToken.inkPaper)
+        .animation(.nEaseOutQuint, value: bulkMode)
+        .animation(.nEaseOutQuint, value: bulkSelection.isEmpty)
+        // ⌘A — select all visible/filtered atoms (also enters bulk mode).
+        .onExitCommand { exitBulkMode() }   // Esc
+        .background(selectAllShortcut)
     }
 
     // MARK: – Search bar
@@ -71,6 +90,16 @@ struct MacAtomList: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            // Bulk-mode toggle — small mono affordance matching list chrome.
+            Button { toggleBulkMode() } label: {
+                Image(systemName: bulkMode ? "checklist.checked" : "checklist")
+                    .foregroundStyle(bulkMode ? NSColorToken.Phos.cyan : NSColorToken.textGhost)
+                    .imageScale(.small)
+            }
+            .buttonStyle(.plain)
+            .help(bulkMode ? "Exit select mode (Esc)" : "Select multiple")
+            .accessibilityLabel(bulkMode ? "Exit select mode" : "Select multiple atoms")
         }
     }
 
@@ -84,21 +113,38 @@ struct MacAtomList: View {
                         MacAtomRow(
                             atom: atom,
                             isSelected: selectedAtomID == atom.id,
-                            inboundCount: store.inboundCount(of: atom.id)
+                            inboundCount: store.inboundCount(of: atom.id),
+                            bulkMode: bulkMode,
+                            isBulkSelected: bulkSelection.contains(atom.id)
                         )
                         .tag(atom.id)
-                        .listRowBackground(
-                            selectedAtomID == atom.id
-                                ? NSColorToken.inkRaised.opacity(0.8)
-                                : Color.clear
-                        )
+                        .listRowBackground(rowBackground(for: atom))
                         .listRowInsets(EdgeInsets(
                             top: 0,
                             leading: 0,
                             bottom: 0,
                             trailing: NSpace.md
                         ))
+                        // In bulk mode, a tap toggles membership instead of opening
+                        // detail. Single-click → detail is preserved when not in bulk.
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if bulkMode { toggleMembership(atom.id) }
+                            else        { selectedAtomID = atom.id }
+                        }
                         .contextMenu {
+                            if bulkMode {
+                                Button { toggleMembership(atom.id) } label: {
+                                    Label(bulkSelection.contains(atom.id) ? "Deselect" : "Select",
+                                          systemImage: bulkSelection.contains(atom.id) ? "circle" : "checkmark.circle")
+                                }
+                            } else {
+                                Button {
+                                    enterBulkMode(selecting: atom.id)
+                                } label: {
+                                    Label("Select", systemImage: "checkmark.circle")
+                                }
+                            }
                             Button(role: .destructive) {
                                 onDelete(atom)
                             } label: {
@@ -124,6 +170,159 @@ struct MacAtomList: View {
         .scrollContentBackground(.hidden)
         .background(NSColorToken.inkPaper)
         .animation(.nEaseOutQuint, value: filtered.map(\.id))
+    }
+
+    /// Row wash: bulk selection wins (phosphor tint) while in bulk mode, else the
+    /// existing single-selection raised wash.
+    private func rowBackground(for atom: AtomSnapshot) -> Color {
+        if bulkMode && bulkSelection.contains(atom.id) {
+            return atom.type.phosphor.opacity(0.14)
+        }
+        return selectedAtomID == atom.id
+            ? NSColorToken.inkRaised.opacity(0.8)
+            : Color.clear
+    }
+
+    // MARK: – Bulk action bar
+
+    private var bulkActionBar: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(NSColorToken.textGhost.opacity(0.12))
+                .frame(height: 0.5)
+
+            HStack(spacing: NSpace.sm) {
+                Text("\(bulkSelection.count) selected")
+                    .font(NFont.monoSmall(11))
+                    .foregroundStyle(NSColorToken.textSecondary)
+                    .monospacedDigit()
+
+                Spacer(minLength: NSpace.sm)
+
+                // Add tag — inline field, commits on Return.
+                HStack(spacing: NSpace.xs) {
+                    Image(systemName: "number")
+                        .imageScale(.small)
+                        .foregroundStyle(NSColorToken.textGhost)
+                    TextField("tag", text: $bulkTagDraft)
+                        .font(NFont.mono(11))
+                        .foregroundStyle(NSColorToken.textPrimary)
+                        .textFieldStyle(.plain)
+                        .frame(width: 70)
+                        .focused($bulkTagFocused)
+                        .onSubmit(commitBulkTag)
+                        .accessibilityLabel("Add tag to selected atoms")
+                }
+
+                // Set type
+                Menu {
+                    ForEach(AtomType.allCases, id: \.self) { type in
+                        Button(type.label.capitalized) {
+                            store.bulkSetType(Array(bulkSelection), to: type)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "circle.grid.2x2")
+                        .imageScale(.small)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Set type")
+
+                // Set due
+                Menu {
+                    Button("Today")    { store.bulkSetDue(Array(bulkSelection), to: startOfToday()) }
+                    Button("Tomorrow") { store.bulkSetDue(Array(bulkSelection), to: startOfTomorrow()) }
+                    Divider()
+                    Button("Clear due") { store.bulkSetDue(Array(bulkSelection), to: nil) }
+                } label: {
+                    Image(systemName: "calendar")
+                        .imageScale(.small)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Set due date")
+
+                // Delete
+                Button(role: .destructive) {
+                    let ids = Array(bulkSelection)
+                    store.bulkDelete(ids)
+                    bulkSelection.removeAll()
+                } label: {
+                    Image(systemName: "trash")
+                        .imageScale(.small)
+                        .foregroundStyle(NSColorToken.Phos.orange)
+                }
+                .buttonStyle(.plain)
+                .help("Delete selected")
+
+                // Clear selection
+                Button { bulkSelection.removeAll() } label: {
+                    Image(systemName: "xmark")
+                        .imageScale(.small)
+                        .foregroundStyle(NSColorToken.textGhost)
+                }
+                .buttonStyle(.plain)
+                .help("Clear selection")
+            }
+            .padding(.horizontal, NSpace.md)
+            .padding(.vertical, NSpace.sm)
+            .background(NSColorToken.inkRaised)
+        }
+    }
+
+    /// Invisible button hosting the ⌘A shortcut so it works regardless of focus.
+    private var selectAllShortcut: some View {
+        Button(action: selectAllVisible) { EmptyView() }
+            .buttonStyle(.plain)
+            .keyboardShortcut("a", modifiers: .command)
+            .opacity(0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    // MARK: – Bulk helpers
+
+    private func toggleBulkMode() {
+        if bulkMode { exitBulkMode() } else { bulkMode = true }
+    }
+
+    private func enterBulkMode(selecting id: UUID) {
+        bulkMode = true
+        bulkSelection.insert(id)
+    }
+
+    private func exitBulkMode() {
+        bulkMode = false
+        bulkSelection.removeAll()
+        bulkTagDraft = ""
+        bulkTagFocused = false
+    }
+
+    private func toggleMembership(_ id: UUID) {
+        if bulkSelection.contains(id) { bulkSelection.remove(id) }
+        else                          { bulkSelection.insert(id) }
+    }
+
+    private func selectAllVisible() {
+        bulkMode = true
+        bulkSelection = Set(filtered.map(\.id))
+    }
+
+    private func commitBulkTag() {
+        let tag = bulkTagDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tag.isEmpty, !bulkSelection.isEmpty else { return }
+        store.bulkAddTag(Array(bulkSelection), tag: tag)
+        bulkTagDraft = ""
+    }
+
+    private func startOfToday() -> Date {
+        Calendar.current.startOfDay(for: Date())
+    }
+
+    private func startOfTomorrow() -> Date {
+        let cal = Calendar.current
+        return cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: Date()) ?? Date())
     }
 
     // MARK: – Empty state
@@ -198,16 +397,32 @@ private struct MacAtomRow: View {
     let atom: AtomSnapshot
     let isSelected: Bool
     var inboundCount: Int = 0
+    var bulkMode: Bool = false
+    var isBulkSelected: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // P3: 2px phosphor left-edge accent on selection
+            // P3: 2px phosphor left-edge accent on selection (single OR bulk)
             Rectangle()
-                .fill(isSelected ? atom.type.phosphor.opacity(0.75) : Color.clear)
+                .fill((isSelected || (bulkMode && isBulkSelected))
+                      ? atom.type.phosphor.opacity(0.75) : Color.clear)
                 .frame(width: 2)
                 .animation(.nEaseOutQuint, value: isSelected)
+                .animation(.nEaseOutQuint, value: isBulkSelected)
 
             HStack(alignment: .top, spacing: NSpace.sm) {
+                // Bulk-mode checkbox — replaces nothing; sits before the type dot.
+                if bulkMode {
+                    Image(systemName: isBulkSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(isBulkSelected
+                                         ? atom.type.phosphor
+                                         : NSColorToken.textGhost)
+                        .padding(.top, 1)
+                        .accessibilityHidden(true)
+                        .animation(.nPress, value: isBulkSelected)
+                }
+
                 // Type dot
                 Circle()
                     .fill(atom.type.phosphor)

@@ -47,6 +47,9 @@ struct MacRootView: View {
     // Compose sheet
     @State private var showCompose = false
 
+    // Command palette (⌘K)
+    @State private var showPalette = false
+
     // Meet session (Chrome extension — polled from backend)
     @State private var activeMeetSession: NousBackendClient.ActiveMeetSession?
 
@@ -103,6 +106,17 @@ struct MacRootView: View {
                         undoManager.scheduleDelete(atom: atom, store: store)
                         selectedAtomID = nil
                     }
+                    // Command palette (⌘K) — centered overlay over a blurred scrim
+                    .overlay {
+                        if showPalette {
+                            MacCommandPalette(
+                                store: store,
+                                actions: paletteActions(store: store),
+                                onClose: { withAnimation(.nEaseOutQuint) { showPalette = false } }
+                            )
+                            .zIndex(20)
+                        }
+                    }
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -113,6 +127,7 @@ struct MacRootView: View {
         .animation(.nDrawer, value: activeMeetSession?.id)
         .animation(.nDrawer, value: meetRecorder.isRecording)
         .animation(.nDrawer, value: showDetectionBanner)
+        .animation(.nEaseOutQuint, value: showPalette)
         .preferredColorScheme(.dark)
         .task { bootstrap() }
         // Compute related atoms off the MainActor whenever the selected atom
@@ -168,6 +183,16 @@ struct MacRootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .nousOpenCompose)) { _ in
             showCompose = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nousOpenPalette)) { _ in
+            withAnimation(.nEaseOutQuint) { showPalette = true }
+        }
+        // Daily Briefing (and other surfaces) post this to focus an atom in the detail pane.
+        .onReceive(NotificationCenter.default.publisher(for: .nousSelectAtom)) { note in
+            if let s = note.userInfo?["atomID"] as? String, let uuid = UUID(uuidString: s) {
+                sidebarSelection = .stream
+                selectedAtomID = uuid
+            }
         }
         // Pull immediately when the Mac app gains focus so data from other devices
         // appears without waiting for the 30s periodic poll.
@@ -339,6 +364,33 @@ struct MacRootView: View {
                   : "Record meeting — captures mic + call audio (⌘⌥M)")
             .keyboardShortcut("m", modifiers: [.command, .option])
         }
+    }
+
+    // MARK: – Command palette wiring
+
+    /// Maps each palette command to the exact path the toolbar buttons / sidebar
+    /// already use — no new mechanisms are introduced.
+    private func paletteActions(store: AtomStore) -> MacCommandPalette.Actions {
+        MacCommandPalette.Actions(
+            openCapture:   { showCapture = true },
+            openSearch:    { sidebarSelection = .search },
+            openSynthesis: { sidebarSelection = .synthesis },
+            openCompose:   { showCompose = true },
+            recordMeeting: {
+                if meetRecorder.isRecording {
+                    stopMeetingRecording(store: store)
+                } else {
+                    showMeetSetup = true
+                }
+            },
+            setTypeFilter: { type in sidebarSelection = .type(type) },
+            openAtom: { atom in
+                // Type filters / synthesis keep the detail panel hidden, so
+                // return to the stream before selecting, mirroring MacSearchView.
+                sidebarSelection = .stream
+                withAnimation(.nDrawer) { selectedAtomID = atom.id }
+            }
+        )
     }
 
     // MARK: – Sidebar filter

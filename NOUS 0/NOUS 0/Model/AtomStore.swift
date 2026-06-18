@@ -262,6 +262,49 @@ final class AtomStore {
         apply(ev, persist: true)
     }
 
+    // MARK: - Bulk mutations
+
+    /// Bulk delete — applies a `.deleted` event per atom (same as single `delete`),
+    /// cancels each atom's reminder, then rebuilds ordered once. Skips missing/
+    /// already-deleted atoms so the count logged reflects real deletions.
+    func bulkDelete(_ ids: [UUID]) {
+        var deleted = 0
+        for id in ids {
+            guard let a = atoms[id], !a.isDeleted else { continue }
+            let ev = NoteEvent(atomID: id, kind: .deleted, payload: .init())
+            apply(ev, persist: true)
+            ReminderScheduler.cancel(atomID: id)   // R3 — mirror single delete
+            deleted += 1
+        }
+        rebuildOrdered()
+        NousLogger.info("store", "bulk delete", ["requested": "\(ids.count)", "deleted": "\(deleted)"])
+    }
+
+    /// Bulk add a single tag to many atoms. Each atom reuses the single `addTag`
+    /// path (dedupe + normalization + per-atom `.tagged` event), so atoms that
+    /// already carry the tag are no-ops.
+    func bulkAddTag(_ ids: [UUID], tag: String) {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return }
+        for id in ids { addTag(id: id, tag: trimmed) }
+        NousLogger.info("store", "bulk add tag", ["count": "\(ids.count)", "tag": trimmed])
+    }
+
+    /// Bulk set type. Reuses single `setType` (which no-ops when the type already
+    /// matches), so a partially-matching selection only emits events where needed.
+    func bulkSetType(_ ids: [UUID], to type: AtomType) {
+        for id in ids { setType(id: id, to: type) }
+        NousLogger.info("store", "bulk set type", ["count": "\(ids.count)", "type": type.rawValue])
+    }
+
+    /// Bulk set (or clear) due date. Reuses single `setDue(id:to:)`, which also
+    /// schedules/cancels reminders. Passing `nil` clears the due date + reminder.
+    func bulkSetDue(_ ids: [UUID], to date: Date?) {
+        for id in ids { setDue(id: id, to: date) }
+        NousLogger.info("store", "bulk set due",
+                        ["count": "\(ids.count)", "due": date.map { "\($0)" } ?? "nil"])
+    }
+
     private var pendingDeleteIDs: Set<UUID> = []
 
     func stagePendingDelete(id: UUID) {

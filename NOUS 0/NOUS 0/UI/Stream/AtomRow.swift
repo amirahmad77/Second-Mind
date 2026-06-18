@@ -56,15 +56,16 @@ struct AtomRow: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, NSpace.md)
-        // Selection: phosphor wash + 2pt leading accent bar for unambiguous spatial anchor
+        // Selection: phosphor wash + 2pt leading edge bar — the shared selection
+        // language with macOS MacAtomRow (treatment unified, density kept roomy).
         .background(
             atom.type.phosphor
-                .opacity(isSelected ? 0.055 : 0)
+                .opacity(isSelected ? 0.12 : 0)
                 .animation(.nEaseOutQuint, value: isSelected)
         )
         .overlay(alignment: .leading) {
             Rectangle()
-                .fill(atom.type.phosphor.opacity(isSelected ? 0.72 : 0))
+                .fill(atom.type.phosphor.opacity(isSelected ? 0.85 : 0))
                 .frame(width: 2)
                 .animation(.nEaseOutQuint, value: isSelected)
         }
@@ -99,9 +100,11 @@ struct AtomRow: View {
         let effectiveScale = dotBloom * (isSelected ? 1.25 : 1.0)
         let dotView = AtomDot(type: atom.type)
             .scaleEffect(effectiveScale)
-            // Selection halo: second shadow ring radiates further when selected
+            // On/off chroma: selected dot at full color, unselected dimmed.
+            .opacity(isSelected ? 1.0 : NSColorToken.Phos.dimOpacity)
+            // Selection halo: phosphor activeGlow ring radiates when selected.
             .shadow(color: isSelected ? atom.type.phosphor.opacity(0.55) : .clear,
-                    radius: 12, x: 0, y: 0)
+                    radius: NSColorToken.Phos.activeGlow, x: 0, y: 0)
             .animation(.nEaseOutQuint, value: isSelected)
         Group {
             if let ns = morphNS {

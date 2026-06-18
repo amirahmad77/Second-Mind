@@ -40,6 +40,11 @@ struct RootView: View {
     @State private var voiceStartTime: Date?
     @State private var voiceFingerOffset: CGSize = .zero
 
+    // Capture-landed bloom: brief type-colored flash when a capture lands.
+    @State private var captureBloom = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     enum Sheet { case none, text, search, tasks, synthesis }
 
     var body: some View {
@@ -255,9 +260,22 @@ struct RootView: View {
 
     // MARK: Orb + gestures
 
+    /// True when ≥1 live atom is refining in the background. Drives the orb's
+    /// ambient heartbeat so the signature object doubles as a status readout.
+    private var isRefiningAny: Bool {
+        guard let store else { return false }
+        return store.atoms.values.contains { $0.isRefining && !$0.isDeleted }
+    }
+
     private var orb: some View {
-        Orb(mode: orbMode, touchPoint: CGPoint(x: 0.5, y: 0.5))
+        Orb(mode: orbMode,
+            touchPoint: CGPoint(x: 0.5, y: 0.5),
+            ambientRefining: isRefiningAny)
             .frame(width: 200, height: 60)
+            // Capture-landed bloom: a quick phosphor flash behind the pill when
+            // a note lands. Cyan = .thought (capture's default type). Subtle,
+            // additive, fully transparent at rest. Skipped under reduce-motion.
+            .background(captureBloomOverlay)
             .contentShape(Capsule())
             .gesture(
                 // Long press → voice
@@ -349,9 +367,32 @@ struct RootView: View {
         }
     }
 
+    /// Phosphor bloom that flashes behind the orb the instant a capture lands,
+    /// then fades. Cyan matches `.thought`, capture's default type. Sits at rest
+    /// fully transparent so it never affects layout or the idle look.
+    @ViewBuilder
+    private var captureBloomOverlay: some View {
+        Capsule()
+            .fill(NSColorToken.Phos.cyan.opacity(captureBloom ? 0.35 : 0.0))
+            .blur(radius: 18)
+            .scaleEffect(captureBloom ? 1.12 : 0.96)
+            .allowsHitTesting(false)
+    }
+
     /// Brief orb confirmation: textActive → refining → idle. Visual "atom landed" signal.
+    /// Adds a quick type-colored bloom so the capture visibly "lands" before the
+    /// refining state takes over — on the existing 1.1s timing.
     private func pulseOrbSaved() {
         withAnimation(.nEaseOutQuint) { orbMode = .refining }
+        // Bloom in fast, then ease back out — a single flash, not a pulse.
+        // Reduce-motion: skip the animated bloom entirely (refining state alone
+        // carries the confirmation).
+        if !reduceMotion {
+            withAnimation(.nPress) { captureBloom = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                withAnimation(.nEaseOutQuint) { captureBloom = false }
+            }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
             withAnimation(.nEaseOutQuint) { orbMode = .idle }
         }

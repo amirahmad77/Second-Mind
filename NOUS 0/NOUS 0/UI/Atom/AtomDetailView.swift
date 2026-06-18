@@ -21,7 +21,15 @@ struct AtomDetailView: View {
     @State private var contentBlur: CGFloat = 0
     @State private var scanlineY: CGFloat = -1
     @State private var showTypePicker = false
+    // Refine-reveal crystallization state.
+    // `dotGlow` is the type-dot bloom radius: spikes on refine completion, settles to rest.
+    // `tagsRevealed` gates the staggered tag entrance after the dot ignites + content resolves.
+    @State private var dotGlow: CGFloat = 0
+    @State private var tagsRevealed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Rest-state glow radius for the type dot once a thought has crystallized.
+    private var dotRestGlow: CGFloat { NSColorToken.Phos.activeGlow * 0.5 }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -49,10 +57,49 @@ struct AtomDetailView: View {
               )
         )
         .onAppear {
+            // Atoms that arrive already crystallized show their dot glow + tags at rest —
+            // the reveal choreography only fires for live refine completions.
+            if !atom.isRefining {
+                tagsRevealed = true
+                dotGlow = reduceMotion ? 0 : dotRestGlow
+            }
             guard !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
                 refinePulse = true
             }
+        }
+        .onChange(of: atom.isRefining) { wasRefining, nowRefining in
+            // The crystallization moment: refine just finished (true → false).
+            guard wasRefining, !nowRefining else {
+                // Re-entered refining (e.g. manual edit re-queued): reset the reveal.
+                if nowRefining {
+                    tagsRevealed = false
+                    dotGlow = 0
+                }
+                return
+            }
+            revealCrystallization()
+        }
+    }
+
+    /// Orchestrates the refine reveal: dot ignites (bloom → settle) → content resolves
+    /// (handled by the existing blur swap) → tags stagger in. Reduce-motion collapses
+    /// this to a clean crossfade with no bloom or stagger.
+    private func revealCrystallization() {
+        NousLogger.debug("store", "refine reveal: crystallizing atom \(atom.id)")
+        guard !reduceMotion else {
+            dotGlow = 0
+            tagsRevealed = true
+            return
+        }
+        // 1. Type-dot ignition — spike the bloom, then settle to the rest glow.
+        withAnimation(.nEaseOutQuint) { dotGlow = NSColorToken.Phos.activeGlow * 2.2 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            withAnimation(.nEaseInOutQuint) { dotGlow = dotRestGlow }
+        }
+        // 2. Tags stagger in after the dot ignites and content begins resolving.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            withAnimation(.nEaseOutQuint) { tagsRevealed = true }
         }
     }
 
@@ -199,7 +246,10 @@ struct AtomDetailView: View {
             // Dot + optional pulse
             HStack(alignment: .center, spacing: NSpace.xs) {
                 AtomDot(type: atom.type, size: 14)
+                // Base ambient glow + dynamic ignition bloom. `dotGlow` spikes the moment
+                // refine completes (the thought crystallizing), then settles to a rest halo.
                 .shadow(color: atom.type.phosphor.opacity(0.45), radius: 10, x: 0, y: 0)
+                .shadow(color: atom.type.phosphor.opacity(0.65), radius: dotGlow, x: 0, y: 0)
 
                 if atom.isRefining {
                     Circle()
@@ -453,7 +503,7 @@ struct AtomDetailView: View {
 
             if !atom.tags.isEmpty {
                 TagFlowLayout(spacing: NSpace.sm) {
-                    ForEach(atom.tags, id: \.self) { tag in
+                    ForEach(Array(atom.tags.enumerated()), id: \.element) { index, tag in
                         HStack(spacing: 5) {
                             Text(tag.value)
                                 .font(NFont.monoSmall(10))
@@ -484,6 +534,17 @@ struct AtomDetailView: View {
                         .overlay(
                             RoundedRectangle(cornerRadius: 3)
                                 .stroke(NSColorToken.textGhost.opacity(0.30), lineWidth: 0.5)
+                        )
+                        // Staggered crystallization entrance: each chip fades + rises with a
+                        // small per-index delay so tags materialize in sequence, not all at once.
+                        // Reduce-motion: no offset, plain crossfade (tagsRevealed flips opacity).
+                        .opacity(tagsRevealed ? 1 : 0)
+                        .offset(y: (tagsRevealed || reduceMotion) ? 0 : 6)
+                        .animation(
+                            reduceMotion
+                                ? .nEaseInOutQuint
+                                : .nEaseOutQuint.delay(Double(index) * 0.05),
+                            value: tagsRevealed
                         )
                     }
                 }

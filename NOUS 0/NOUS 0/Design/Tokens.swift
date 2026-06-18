@@ -26,6 +26,15 @@ enum NSColorToken {
         static let amber  = Color.oklch(0.84, 0.18,  75)
         static let orange = Color.oklch(0.74, 0.20,  45)
         static let violet = Color.oklch(0.70, 0.18, 295)
+
+        // ── On / off state (Phosphor Instrument) ────────────────────────────
+        // The UI suffers from uniform intensity — everything whispers at the same
+        // volume. Give active/selected elements a real "on" state (full chroma +
+        // bloom) and dim everything else, so the eye gets a peak and a rest.
+        // Active = full phosphor color + `activeGlow` shadow; inactive = color at
+        // `dimOpacity`. Apply across rows, sidebar, dots, accent bars.
+        static let dimOpacity: Double = 0.40   // inactive phosphor accents
+        static let activeGlow: CGFloat = 8      // shadow blur radius for the "on" state
     }
 }
 
@@ -37,6 +46,12 @@ enum NSpace {
 
 /// Font stack: primary picks if bundled, else graceful fallbacks. All ship-safe.
 enum NFont {
+    // Wordmark — the "nous" brand voice (serif, light). Previously a one-off
+    // literal on the sign-in screen; tokenized here so it can appear in app
+    // chrome (sidebar header, stream top) and stay consistent.
+    static func wordmark(_ size: CGFloat = 56) -> Font {
+        Font.system(size: size, weight: .light, design: .serif)
+    }
     // Display (day headers) — heavy compressed sans. Signage/silkscreen register.
     // Day markers read like industrial labels on TE hardware.
     static func dayHeader(_ size: CGFloat = 28) -> Font {

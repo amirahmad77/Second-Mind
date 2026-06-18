@@ -172,14 +172,15 @@ struct MacAtomList: View {
         .animation(.nEaseOutQuint, value: filtered.map(\.id))
     }
 
-    /// Row wash: bulk selection wins (phosphor tint) while in bulk mode, else the
-    /// existing single-selection raised wash.
+    /// Row wash: a phosphor-tinted wash for both bulk selection (in bulk mode) and
+    /// single selection — the unified selection language shared with iOS AtomRow.
+    /// Bulk wash sits slightly stronger so it reads in a multi-row context.
     private func rowBackground(for atom: AtomSnapshot) -> Color {
         if bulkMode && bulkSelection.contains(atom.id) {
             return atom.type.phosphor.opacity(0.14)
         }
         return selectedAtomID == atom.id
-            ? NSColorToken.inkRaised.opacity(0.8)
+            ? atom.type.phosphor.opacity(0.12)
             : Color.clear
     }
 
@@ -402,10 +403,11 @@ private struct MacAtomRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // P3: 2px phosphor left-edge accent on selection (single OR bulk)
+            // 2px phosphor left-edge bar on selection (single OR bulk) — shared
+            // selection language with iOS AtomRow.
             Rectangle()
                 .fill((isSelected || (bulkMode && isBulkSelected))
-                      ? atom.type.phosphor.opacity(0.75) : Color.clear)
+                      ? atom.type.phosphor.opacity(0.85) : Color.clear)
                 .frame(width: 2)
                 .animation(.nEaseOutQuint, value: isSelected)
                 .animation(.nEaseOutQuint, value: isBulkSelected)
@@ -423,12 +425,18 @@ private struct MacAtomRow: View {
                         .animation(.nPress, value: isBulkSelected)
                 }
 
-                // Type dot
+                // Type dot — on/off chroma shared with iOS: full color when the
+                // row is the active selection, dimmed otherwise. Bulk membership
+                // also counts as "on" so selected rows read at full chroma.
+                let dotActive = isSelected || (bulkMode && isBulkSelected)
                 Circle()
                     .fill(atom.type.phosphor)
                     .frame(width: 6, height: 6)
-                    .shadow(color: atom.type.phosphor.opacity(isSelected ? 0.60 : 0.35), radius: 4)
+                    .opacity(dotActive ? 1.0 : NSColorToken.Phos.dimOpacity)
+                    .shadow(color: atom.type.phosphor.opacity(dotActive ? 0.55 : 0.20),
+                            radius: dotActive ? NSColorToken.Phos.activeGlow : 4)
                     .padding(.top, 5)
+                    .animation(.nEaseOutQuint, value: dotActive)
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: NSpace.xs) {

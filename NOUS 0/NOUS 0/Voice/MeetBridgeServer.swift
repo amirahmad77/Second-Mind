@@ -111,7 +111,10 @@ final class MeetBridgeServer {
     // ── Send recording state to extension ─────────────────────────────────
 
     func sendRecordingState(_ active: Bool) {
-        sendJSON(["type": "recording", "active": active])
+        // Include the room so the merged extension only suppresses its own cloud
+        // Meet capture for the meeting the desktop app is actually recording —
+        // avoids double-capturing (local recorder + cloud) the same call.
+        sendJSON(["type": "recording", "active": active, "meetingRoom": meetingRoomID ?? ""])
     }
 
     // ── Accept new TCP connection ──────────────────────────────────────────

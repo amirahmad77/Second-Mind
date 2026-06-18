@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Specimen slab. Full-screen surface for one atom.
-/// Layout: floating controls (top-right) → scrolling content (type block → body → footer → tags) → related strip (pinned).
-/// Type identity lives inside the scroll, not a header bar — creates editorial breathing room.
+/// Editorial layout: floating controls (ghost) → scrolling content (type identity →
+/// body → status → tags) → related strip (pinned, feels continuous).
 struct AtomDetailView: View {
     let atom: AtomSnapshot
     let related: [AtomSnapshot]
@@ -28,10 +28,9 @@ struct AtomDetailView: View {
             backdrop
 
             VStack(spacing: 0) {
-                // Floating controls — don't interrupt the reading surface
                 controls
-                    .padding(.horizontal, NSpace.xl)
-                    .padding(.top, NSpace.lg)
+                    .padding(.horizontal, NSpace.lg)
+                    .padding(.top, NSpace.md)
 
                 contentScroll
 
@@ -42,10 +41,16 @@ struct AtomDetailView: View {
         }
         .background(NSColorToken.inkVoid.ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .transition(.opacity)
+        .transition(reduceMotion
+            ? .opacity
+            : .asymmetric(
+                insertion: .opacity.combined(with: .move(edge: .bottom)),
+                removal: .opacity.combined(with: .move(edge: .bottom))
+              )
+        )
         .onAppear {
             guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
                 refinePulse = true
             }
         }
@@ -55,26 +60,27 @@ struct AtomDetailView: View {
 
     private var backdrop: some View {
         ZStack {
+            // Primary halo — top-left, keyed to atom type
             RadialGradient(
-                colors: [atom.type.phosphor.opacity(0.30), .clear],
-                center: UnitPoint(x: 0.12, y: 0.10),
+                colors: [atom.type.phosphor.opacity(0.18), .clear],
+                center: UnitPoint(x: 0.08, y: 0.06),
                 startRadius: 0,
-                endRadius: 600
+                endRadius: 520
             )
+            // Secondary whisper — bottom-right, much softer
             RadialGradient(
-                colors: [atom.type.phosphor.opacity(0.07), .clear],
-                center: UnitPoint(x: 0.90, y: 1.0),
+                colors: [atom.type.phosphor.opacity(0.05), .clear],
+                center: UnitPoint(x: 0.95, y: 1.0),
                 startRadius: 0,
-                endRadius: 380
+                endRadius: 320
             )
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
-        // Cross-fades the halo color when type is revealed by Gemini
-        .animation(.spring(response: 0.6, dampingFraction: 0.7), value: atom.type)
+        .animation(.spring(response: 0.7, dampingFraction: 0.8), value: atom.type)
     }
 
-    // MARK: – Controls (floating, top-right)
+    // MARK: – Controls (ghost, top-right)
 
     private var controls: some View {
         HStack(spacing: NSpace.xs) {
@@ -83,30 +89,41 @@ struct AtomDetailView: View {
                 Button(action: commitEdit) {
                     Text("done")
                         .font(NFont.mono(11))
-                        .foregroundStyle(atom.type.phosphor.opacity(0.80))
-                        .frame(height: 40)
+                        .foregroundStyle(atom.type.phosphor.opacity(0.75))
                         .padding(.horizontal, NSpace.sm)
-                        .contentShape(Rectangle())
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(atom.type.phosphor.opacity(0.08))
+                        )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Done editing")
             } else {
                 Button(action: deleteAtom) {
                     Image(systemName: "trash")
-                        .font(.system(size: 12, weight: .light))
-                        .foregroundStyle(NSColorToken.textGhost)
-                        .frame(width: 40, height: 40)
+                        .font(.system(size: 11, weight: .light))
+                        .foregroundStyle(NSColorToken.textGhost.opacity(0.6))
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Delete atom")
+                .accessibilityHint("Removes this atom permanently")
             }
             Button(action: close) {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 14, weight: .light))
-                    .foregroundStyle(NSColorToken.textSecondary)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Rectangle())
+                    .font(.system(size: 13, weight: .light))
+                    .foregroundStyle(NSColorToken.textTertiary)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        Circle()
+                            .fill(NSColorToken.inkRaised.opacity(0.55))
+                    )
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close")
         }
     }
 
@@ -117,43 +134,50 @@ struct AtomDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 typeBlock
                     .padding(.horizontal, NSpace.xl)
-                    .padding(.top, NSpace.xxxl)
-                    .padding(.bottom, NSpace.x4)
+                    .padding(.top, NSpace.x4)
+                    .padding(.bottom, NSpace.xxxl)
 
                 bodyContent
                     .padding(.horizontal, NSpace.xl)
 
                 statusLine
                     .padding(.horizontal, NSpace.xl)
-                    .padding(.top, NSpace.lg)
+                    .padding(.top, NSpace.xl)
 
                 tagBlock
                     .padding(.horizontal, NSpace.xl)
-                    .padding(.top, NSpace.xxl)
+                    .padding(.top, NSpace.xxxl)
 
                 Color.clear.frame(height: NSpace.x5)
             }
-            .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: 620, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
     }
 
-    // MARK: – Type block (identity header inside scroll)
+    // MARK: – Type block
 
     private var typeBlock: some View {
-        VStack(alignment: .leading, spacing: NSpace.sm) {
-            HStack(alignment: .center, spacing: NSpace.sm) {
-                AtomDot(type: atom.type, size: 11)
-                // Refining pulse dot — appears alongside the main dot while processing
+        VStack(alignment: .leading, spacing: NSpace.md) {
+            // Dot + optional pulse
+            HStack(alignment: .center, spacing: NSpace.xs) {
+                AtomDot(type: atom.type, size: 14)
+                .shadow(color: atom.type.phosphor.opacity(0.45), radius: 10, x: 0, y: 0)
+
                 if atom.isRefining {
                     Circle()
                         .fill(atom.type.phosphor)
                         .frame(width: 3, height: 3)
-                        .opacity(refinePulse ? 0.85 : 0.15)
+                        .opacity(refinePulse ? 0.90 : 0.15)
+                        .animation(
+                            reduceMotion ? nil : .easeInOut(duration: 2.2).repeatForever(autoreverses: true),
+                            value: refinePulse
+                        )
                 }
             }
-            // Tap type label → open inline picker for manual override
+
+            // Type label — tappable for manual override
             Button {
                 guard !atom.isRefining else { return }
                 withAnimation(.nEaseOutQuint) { showTypePicker.toggle() }
@@ -164,37 +188,44 @@ struct AtomDetailView: View {
                         .font(NFont.mono(10))
                         .foregroundStyle(
                             atom.isRefining
-                                ? atom.type.phosphor.opacity(refinePulse ? 0.65 : 0.30)
-                                : atom.type.phosphor.opacity(0.55)
+                                ? atom.type.phosphor.opacity(refinePulse ? 0.80 : 0.30)
+                                : atom.type.phosphor.opacity(0.70)
                         )
                         .textCase(.uppercase)
-                        .tracking(2.8)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 1.8).repeatForever(autoreverses: true), value: refinePulse)
+                        .tracking(3.2)
+                        .animation(
+                            reduceMotion ? nil : .easeInOut(duration: 2.2).repeatForever(autoreverses: true),
+                            value: refinePulse
+                        )
                         .contentTransition(.opacity)
                         .animation(.nEaseOutQuint, value: atom.type)
                     if !atom.isRefining {
                         Image(systemName: showTypePicker ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 8, weight: .light))
-                            .foregroundStyle(atom.type.phosphor.opacity(0.35))
+                            .font(.system(size: 7.5, weight: .light))
+                            .foregroundStyle(atom.type.phosphor.opacity(0.30))
                     }
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(atom.isRefining ? "Type: \(atom.type.label), refining" : "Type: \(atom.type.label)")
+            .accessibilityHint(atom.isRefining ? "" : "Double-tap to change atom type")
 
-            // Inline type picker — 6 dots, single tap to change
+            // Inline type picker
             if showTypePicker {
                 DetailTypePicker(current: atom.type) { newType in
                     store.setType(id: atom.id, to: newType)
                     withAnimation(.nEaseOutQuint) { showTypePicker = false }
                 }
-                .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topLeading)))
+                .transition(.opacity.combined(with: .scale(scale: 0.93, anchor: .topLeading)))
                 .padding(.top, NSpace.xs)
             }
 
+            // Timestamp — comfortably below the label
             Text(createdString)
                 .font(NFont.mono(10))
-                .foregroundStyle(NSColorToken.textGhost)
+                .foregroundStyle(NSColorToken.textGhostDim)
                 .monospacedDigit()
+                .padding(.top, NSpace.xs)
         }
     }
 
@@ -207,7 +238,7 @@ struct AtomDetailView: View {
                 .foregroundStyle(NSColorToken.textPrimary)
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 260, alignment: .topLeading)
-                .lineSpacing(6)
+                .lineSpacing(7)
         } else {
             let content = showRaw ? atom.rawContent : atom.displayContent
             MarkdownView(
@@ -223,12 +254,12 @@ struct AtomDetailView: View {
                 if atom.isRefining {
                     GeometryReader { geo in
                         Rectangle()
-                            .fill(atom.type.phosphor.opacity(0.20))
+                            .fill(atom.type.phosphor.opacity(0.15))
                             .frame(height: 1.5)
-                            .blur(radius: 2.5)
+                            .blur(radius: 3)
                             .offset(y: geo.size.height * max(0, scanlineY))
                             .animation(
-                                reduceMotion ? nil : .linear(duration: 1.4).repeatForever(autoreverses: false),
+                                reduceMotion ? nil : .linear(duration: 1.6).repeatForever(autoreverses: false),
                                 value: scanlineY
                             )
                             .onAppear { scanlineY = 1.1 }
@@ -243,12 +274,18 @@ struct AtomDetailView: View {
                 Haptics.shared.softTick()
             }
             .onChange(of: content) { _, _ in
-                // Blur-swap-unblur crossfade when refined content arrives
                 withAnimation(.nEaseOutQuint) { contentBlur = 3 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                     withAnimation(.nEaseOutQuint) { contentBlur = 0 }
                 }
             }
+            .accessibilityLabel(atom.isRefining ? "Content, refining" : (showRaw ? "Raw content" : "Refined content"))
+            .accessibilityHint("Double-tap to edit. Touch and hold to toggle between raw and refined.")
+            .accessibilityAction(named: "Toggle raw/refined") {
+                withAnimation(.nEaseInOutQuint) { showRaw.toggle() }
+                Haptics.shared.softTick()
+            }
+            .accessibilityAction(named: "Edit") { beginEdit() }
         }
     }
 
@@ -258,25 +295,49 @@ struct AtomDetailView: View {
         HStack(spacing: NSpace.md) {
             Group {
                 if atom.isRefining {
-                    // Atmospheric refining indicator — pulsing text, not just a spinner
-                    HStack(spacing: 5) {
-                        Text("//")
-                            .foregroundStyle(atom.type.phosphor.opacity(0.35))
+                    HStack(spacing: 6) {
+                        // Animated phosphor bar
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Rectangle()
+                                    .fill(atom.type.phosphor.opacity(0.10))
+                                    .frame(height: 1)
+                                Rectangle()
+                                    .fill(atom.type.phosphor.opacity(refinePulse ? 0.55 : 0.20))
+                                    .frame(width: geo.size.width * 0.45, height: 1)
+                                    .offset(x: refinePulse ? geo.size.width * 0.55 : 0)
+                                    .animation(
+                                        reduceMotion ? nil : .easeInOut(duration: 2.2).repeatForever(autoreverses: true),
+                                        value: refinePulse
+                                    )
+                            }
+                        }
+                        .frame(height: 1)
+                        .frame(maxWidth: 48)
+
                         Text("refining")
-                            .foregroundStyle(atom.type.phosphor.opacity(refinePulse ? 0.75 : 0.25))
-                            .animation(reduceMotion ? nil : .easeInOut(duration: 1.8).repeatForever(autoreverses: true), value: refinePulse)
+                            .font(NFont.mono(10))
+                            .foregroundStyle(
+                                atom.type.phosphor.opacity(refinePulse ? 0.80 : 0.35)
+                            )
+                            .animation(
+                                reduceMotion ? nil : .easeInOut(duration: 2.2).repeatForever(autoreverses: true),
+                                value: refinePulse
+                            )
+                            .tracking(1.2)
                     }
-                    .font(NFont.mono(10))
+                } else if atom.refineFailed {
+                    refineFailedRow
                 } else if atom.refinedContent != nil {
                     HStack(spacing: 5) {
-                        Text("//")
-                            .foregroundStyle(NSColorToken.textGhost.opacity(0.45))
                         Text(showRaw ? "raw" : "refined")
-                            .foregroundStyle(NSColorToken.textGhost)
+                            .font(NFont.mono(10))
+                            .foregroundStyle(NSColorToken.textTertiary)
+                            .tracking(1.0)
                         Text("· hold to toggle")
-                            .foregroundStyle(NSColorToken.textGhost.opacity(0.35))
+                            .font(NFont.mono(10))
+                            .foregroundStyle(NSColorToken.textGhostDim)
                     }
-                    .font(NFont.mono(10))
                 }
             }
             Spacer(minLength: 0)
@@ -284,6 +345,33 @@ struct AtomDetailView: View {
                 taskToggle
             }
         }
+    }
+
+    // Refine-failure affordance — surfaces a silent give-up and offers a manual retry.
+    private var refineFailedRow: some View {
+        HStack(spacing: NSpace.sm) {
+            Text("// refine failed")
+                .font(NFont.mono(10))
+                .foregroundStyle(NSColorToken.Phos.orange.opacity(0.80))
+                .tracking(1.0)
+            Button(action: { store.retryRefine(id: atom.id); Haptics.shared.softTick() }) {
+                Text("retry")
+                    .font(NFont.mono(10))
+                    .foregroundStyle(NSColorToken.Phos.orange)
+                    .tracking(1.0)
+                    .padding(.horizontal, NSpace.sm)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(NSColorToken.Phos.orange.opacity(0.10))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Retry refine")
+            .accessibilityHint("Refinement failed. Double-tap to try again.")
+        }
+        .accessibilityElement(children: .contain)
     }
 
     private var taskToggle: some View {
@@ -308,54 +396,64 @@ struct AtomDetailView: View {
                         atom.taskDone == true ? NSColorToken.textGhost : NSColorToken.Phos.green
                     )
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(atom.taskDone == true ? "Task complete" : "Task open")
+        .accessibilityHint("Double-tap to toggle task status")
+        .accessibilityAddTraits(atom.taskDone == true ? .isSelected : [])
     }
 
     // MARK: – Tag block
 
     private var tagBlock: some View {
         VStack(alignment: .leading, spacing: NSpace.sm) {
-            // Section marker
-            HStack(spacing: NSpace.sm) {
-                Rectangle()
-                    .fill(NSColorToken.textGhost.opacity(0.18))
-                    .frame(width: 16, height: 0.5)
-                Text("tags")
-                    .font(NFont.mono(9))
-                    .foregroundStyle(NSColorToken.textGhost.opacity(0.55))
-                    .tracking(1.8)
-                    .textCase(.uppercase)
-            }
+            Text("tags")
+                .font(NFont.mono(9))
+                .foregroundStyle(NSColorToken.textGhostDim)
+                .tracking(2.0)
+                .textCase(.uppercase)
 
-            // Existing tags with remove buttons
             if !atom.tags.isEmpty {
                 TagFlowLayout(spacing: NSpace.sm) {
                     ForEach(atom.tags, id: \.self) { tag in
-                        HStack(spacing: 4) {
+                        HStack(spacing: 5) {
                             Text(tag.value)
                                 .font(NFont.monoSmall(10))
-                                .foregroundStyle(NSColorToken.textSecondary)
-                                .textCase(.uppercase)
-                                .tracking(1.2)
+                                .foregroundStyle(NSColorToken.textTertiary)
+                                .tracking(1.0)
                             Button(action: { store.removeTag(id: atom.id, tag: tag.value) }) {
                                 Image(systemName: "xmark")
                                     .font(.system(size: 7, weight: .medium))
-                                    .foregroundStyle(NSColorToken.textGhost)
+                                    .foregroundStyle(NSColorToken.textGhost.opacity(0.60))
+                                    // Expand the tap target without enlarging the glyph or the
+                                    // chip row: pad outward for hit-testing, then negate the
+                                    // padding so layout footprint is unchanged. Keeps the chip
+                                    // row at its drawn height while giving the xmark generous slop.
+                                    .frame(width: 8, height: 8)
+                                    .padding(NSpace.md)
+                                    .contentShape(Rectangle())
+                                    .padding(-NSpace.md)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Remove tag \(tag.value)")
                         }
                         .padding(.horizontal, NSpace.sm)
                         .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(atom.type.phosphor.opacity(0.05))
+                        )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(NSColorToken.textGhost.opacity(0.45), lineWidth: 0.5)
+                            RoundedRectangle(cornerRadius: 3)
+                                .stroke(NSColorToken.textGhost.opacity(0.30), lineWidth: 0.5)
                         )
                     }
                 }
+                .padding(.top, NSpace.xs)
             }
 
-            // Add tag control
             if addingTag {
                 HStack(spacing: NSpace.sm) {
                     TextField("", text: $tagInput, prompt: Text("tag name").foregroundColor(NSColorToken.textGhost))
@@ -369,14 +467,14 @@ struct AtomDetailView: View {
                         .padding(.horizontal, NSpace.sm)
                         .padding(.vertical, 5)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(atom.type.phosphor.opacity(0.4), lineWidth: 0.5)
+                            RoundedRectangle(cornerRadius: 3)
+                                .stroke(atom.type.phosphor.opacity(0.35), lineWidth: 0.5)
                         )
                         .frame(minWidth: 90, maxWidth: 180)
                     Button(action: { addingTag = false; tagInput = "" }) {
                         Text("cancel")
                             .font(NFont.mono(9))
-                            .foregroundStyle(NSColorToken.textGhost.opacity(0.6))
+                            .foregroundStyle(NSColorToken.textGhostDim)
                     }
                     .buttonStyle(.plain)
                 }
@@ -389,7 +487,7 @@ struct AtomDetailView: View {
                         Text("add tag")
                             .font(NFont.mono(9))
                     }
-                    .foregroundStyle(NSColorToken.textGhost.opacity(0.5))
+                    .foregroundStyle(NSColorToken.textGhostDim)
                 }
                 .buttonStyle(.plain)
                 .padding(.top, NSpace.xs)
@@ -408,23 +506,27 @@ struct AtomDetailView: View {
 
     private var relatedDock: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Section divider — ruled line with centered label
-            HStack(spacing: NSpace.md) {
-                Rectangle()
-                    .fill(NSColorToken.textGhost.opacity(0.14))
-                    .frame(height: 0.5)
-                Text("nearby")
-                    .font(NFont.mono(9))
-                    .foregroundStyle(NSColorToken.textGhost.opacity(0.45))
-                    .tracking(1.8)
-                    .textCase(.uppercase)
-                    .fixedSize()
-                Rectangle()
-                    .fill(NSColorToken.textGhost.opacity(0.06))
-                    .frame(height: 0.5)
-            }
-            .padding(.horizontal, NSpace.xl)
-            .padding(.vertical, NSpace.lg)
+            // Fade-in from void, then a thin hairline
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [NSColorToken.textGhost.opacity(0), NSColorToken.textGhost.opacity(0.10)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(height: 0.5)
+                .padding(.horizontal, NSpace.xl)
+                .padding(.top, NSpace.lg)
+
+            Text("related")
+                .font(NFont.mono(9))
+                .foregroundStyle(NSColorToken.textGhostDim)
+                .tracking(2.0)
+                .textCase(.uppercase)
+                .padding(.horizontal, NSpace.xl)
+                .padding(.top, NSpace.md)
+                .padding(.bottom, NSpace.sm)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: NSpace.sm) {
@@ -436,12 +538,11 @@ struct AtomDetailView: View {
                 .padding(.bottom, NSpace.lg)
             }
         }
-        // Subtle ink wash rises from bottom — dock reads as footer, not overlay
         .background(
             LinearGradient(
                 colors: [
-                    NSColorToken.inkPaper.opacity(0.0),
-                    NSColorToken.inkPaper.opacity(0.65)
+                    NSColorToken.inkVoid.opacity(0.0),
+                    NSColorToken.inkVoid.opacity(0.85)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -456,9 +557,9 @@ struct AtomDetailView: View {
                     AtomDot(type: r.type, size: 5)
                     Text(r.type.label)
                         .font(NFont.mono(8))
-                        .foregroundStyle(NSColorToken.textGhost)
+                        .foregroundStyle(r.type.phosphor.opacity(0.50))
                         .textCase(.uppercase)
-                        .tracking(1.2)
+                        .tracking(1.4)
                 }
                 Text(r.oneLiner)
                     .font(NFont.body(13))
@@ -467,15 +568,17 @@ struct AtomDetailView: View {
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(width: 176, alignment: .topLeading)
-            .padding(NSpace.md)
-            .background(NSColorToken.inkRaised.opacity(0.75))
-            .overlay(
-                Rectangle()
-                    .stroke(NSColorToken.textGhost.opacity(0.10), lineWidth: 0.5)
-            )
+            // Fluid card width: 168pt ideal, shrinks to 52% of screen on SE (320pt → ~166pt)
+            // Never overflows the horizontal scroll area on any supported device.
+            .frame(width: 168, alignment: .topLeading)
+            .padding(.vertical, NSpace.md)
+            .padding(.horizontal, NSpace.md)
+            .background(NSColorToken.inkRaised.opacity(0.70))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(r.type.label): \(r.oneLiner)")
+        .accessibilityHint("Double-tap to open related atom")
     }
 
     // MARK: – Helpers
@@ -514,7 +617,6 @@ struct AtomDetailView: View {
 // MARK: - Detail Type Picker
 
 /// Inline 6-dot type selector for manual override in AtomDetailView.
-/// Current type shown with phosphor glow; others ghost. Tap to change.
 private struct DetailTypePicker: View {
     let current: AtomType
     let onSelect: (AtomType) -> Void
@@ -526,20 +628,24 @@ private struct DetailTypePicker: View {
                     guard type != current else { return }
                     onSelect(type)
                 } label: {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 5) {
                         Circle()
-                            .fill(type.phosphor.opacity(type == current ? 1.0 : 0.20))
+                            .fill(type.phosphor.opacity(type == current ? 1.0 : 0.18))
                             .frame(width: 8, height: 8)
-                            .shadow(color: type == current ? type.phosphor.opacity(0.6) : .clear, radius: 5)
+                            .shadow(color: type == current ? type.phosphor.opacity(0.7) : .clear, radius: 6)
                         Text(type.rawValue)
                             .font(NFont.mono(8))
                             .foregroundStyle(type == current
                                              ? type.phosphor.opacity(0.75)
-                                             : NSColorToken.textGhost.opacity(0.45))
+                                             : NSColorToken.textGhostDim)
                             .tracking(0.8)
                     }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(type == current ? "\(type.label), selected" : type.label)
+                .accessibilityHint(type == current ? "" : "Double-tap to change type to \(type.label)")
             }
         }
         .padding(.vertical, NSpace.xs)

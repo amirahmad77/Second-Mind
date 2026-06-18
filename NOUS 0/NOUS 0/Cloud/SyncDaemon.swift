@@ -11,6 +11,11 @@ final class SyncDaemon {
     private var draining = false
     private var backoffSeconds: UInt64 = 0
     private let maxBackoff: UInt64 = 300 // 5 min ceiling
+    // Per-event push resilience: a single permanently-failing event (malformed
+    // payload, RLS-blocked insert) must not head-of-line block the whole queue.
+    private var pushAttempts: [UUID: Int] = [:]   // event id → failed push count
+    private var quarantined: Set<UUID> = []       // events skipped on future drains
+    private let maxPushAttempts = 5
     private var pendingEmbedIDs: Set<UUID> = []   // dedupe enqueues
     private var embedTask: Task<Void, Never>?     // serialize embed pipeline
 
@@ -142,18 +147,62 @@ final class SyncDaemon {
         let pending = (try? context.fetch(desc)) ?? []
         for rec in pending {
             guard let ev = rec.toEvent() else { rec.synced = true; continue }
+            // Skip events previously quarantined after exhausting retries — they
+            // stay unsynced (user data preserved) but never block the queue.
+            if quarantined.contains(ev.id) { continue }
             do {
                 try await supabase.pushEvent(ev)
                 rec.synced = true
                 try? context.save()
                 backoffSeconds = 0
+                pushAttempts[ev.id] = nil
             } catch {
-                // Exponential backoff: 2 → 4 → 8 … capped at 5 min.
-                backoffSeconds = min(maxBackoff, max(2, backoffSeconds * 2))
-                NousLogger.error("sync", "drain push failed, backoff \(backoffSeconds)s", ["error": error.localizedDescription])
-                return
+                // Global/transient failure (offline, 5xx): keep exponential backoff
+                // and stop draining — retrying other events now would also fail.
+                if Self.isTransient(error) {
+                    backoffSeconds = min(maxBackoff, max(2, backoffSeconds * 2))
+                    NousLogger.error("sync", "drain push failed (transient), backoff \(backoffSeconds)s",
+                                     ["error": error.localizedDescription])
+                    return
+                }
+                // Per-event/permanent failure (4xx, RLS-blocked insert): count the
+                // attempt, log, and CONTINUE so one bad event can't stall the queue.
+                let attempts = (pushAttempts[ev.id] ?? 0) + 1
+                pushAttempts[ev.id] = attempts
+                if attempts >= maxPushAttempts {
+                    quarantined.insert(ev.id)
+                    pushAttempts[ev.id] = nil
+                    NousLogger.error("sync", "drain push quarantined event after \(attempts) attempts",
+                                     ["eventID": ev.id.uuidString, "kind": ev.kind.rawValue,
+                                      "error": error.localizedDescription])
+                } else {
+                    NousLogger.warning("sync", "drain push failed (per-event), skipping",
+                                       ["eventID": ev.id.uuidString, "kind": ev.kind.rawValue,
+                                        "attempt": attempts, "error": error.localizedDescription])
+                }
+                continue
             }
         }
+    }
+
+    /// Distinguishes a global/transient failure (network down, server 5xx) — where
+    /// the existing backoff-and-return behavior is correct — from a per-event
+    /// permanent failure (4xx, malformed payload, RLS rejection) — where we skip
+    /// and continue. When the status is unknown, treat it as transient so we never
+    /// quarantine an event that might actually succeed once connectivity returns.
+    private static func isTransient(_ error: Error) -> Bool {
+        if error is URLError { return true } // connectivity, timeout, DNS, etc.
+        let ns = error as NSError
+        // SupabaseClient.check throws NSError(domain: "Supabase", code: <statusCode>).
+        if ns.domain == "Supabase" {
+            let status = ns.code
+            if (400..<500).contains(status) { return false } // 4xx → permanent
+            return true                                       // 5xx / unknown → transient
+        }
+        // RLS-blocked insert (Supabase.pushEvent, code 0) is a permanent config issue.
+        if ns.domain == "Supabase.pushEvent" { return false }
+        // Unknown error origin: err on the side of retrying.
+        return true
     }
 
     private func embedAtom(_ atomID: UUID) async {

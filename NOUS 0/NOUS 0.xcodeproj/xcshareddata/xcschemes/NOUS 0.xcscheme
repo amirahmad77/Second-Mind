@@ -28,6 +28,16 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C1A55E0000000000000001"
+               BuildableName = "NOUS 0Tests.xctest"
+               BlueprintName = "NOUS 0Tests"
+               ReferencedContainer = "container:NOUS 0.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -50,23 +60,6 @@
             ReferencedContainer = "container:NOUS 0.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "NOUS_SUPABASE_ANON_KEY"
-            value = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNzaWJjcXdzYXljbmx6bHh6a2VkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMjc0OTcsImV4cCI6MjA4NjcwMzQ5N30.WVJiK-UruTe39vDCk3ya4Q4HJNnfBk6BxkDnSW1lvdY"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "NOUS_GEMINI_API_KEY"
-            value = "AIzaSyCe5uFPwlILkGKiGNDJxKHRZE_OHk-__jc"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "NOUS_BACKEND_URL"
-            value = "https://nous-backend-k7xtwifwcq-uc.a.run.app"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

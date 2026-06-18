@@ -20,6 +20,23 @@ final class AtomStore {
     private let sync: SyncDaemon
     private let gemini: GeminiClient
 
+    /// In-session refine failure counts. After maxRefineFailures, clear the shimmer for this
+    /// session only (not persisted). Bootstrap re-queues on next launch when API is healthy.
+    private var refineFailures: [UUID: Int] = [:]
+    private static let maxRefineFailures = 3
+
+    /// B1 — Out-of-order event guard. Keyed by "\(atomID)|\(group)" where group is the
+    /// affected field family ("content"/"type"/"task"/"tags"/"due"). A stale remote event
+    /// (clock skew, other device) older than the last applied event for the same group is
+    /// skipped so it cannot silently revert newer state. `.linked` (additive) and `.deleted`
+    /// (terminal) bypass this guard — they are monotonic and must always apply.
+    private var lastApplied: [String: Date] = [:]
+
+    /// B4 — Atoms the user intentionally reverted to raw (empty `.refined` sentinel).
+    /// Populated when folding an empty `.refined` event, cleared when folding a non-empty
+    /// one. Bootstrap's recovery pass must NOT re-queue refine for these.
+    private var revertedAtoms: Set<UUID> = []
+
     init(context: ModelContext, sync: SyncDaemon, gemini: GeminiClient) {
         self.context = context
         self.sync = sync
@@ -36,12 +53,58 @@ final class AtomStore {
         for atom in atoms.values where atom.isRefining && !atom.isDeleted {
             startRefine(id: atom.id, raw: atom.rawContent)
         }
+        // Recovery pass: atoms where a previous refine failure incorrectly wrote an empty
+        // .refined event (isRefining=false, refinedContent=nil). Re-queue them now that
+        // startRefine no longer writes the empty sentinel on failure.
+        // B4 — exclude atoms the user intentionally reverted to raw. The empty `.refined`
+        // sentinel is replayed during the fold above (populating revertedAtoms) BEFORE this
+        // loop runs, so the revert stays sticky across relaunch.
+        for atom in atoms.values where !atom.isRefining && !atom.isDeleted
+                                    && atom.refinedContent == nil
+                                    && atom.rawContent.count >= 8
+                                    && !revertedAtoms.contains(atom.id) {
+            startRefine(id: atom.id, raw: atom.rawContent)
+        }
+        // Rewrite any pre-auth events to the signed-in user_id so they sync to
+        // other devices. No-op if user not yet signed in or migration already ran.
+        migrateLocalUserToSignedIn()
+    }
+
+    /// Rewrites `NoteEventRecord` rows stamped with the per-install `localUserID`
+    /// to use the authenticated user's UUID, then marks them unsynced so drain()
+    /// re-pushes them to Supabase under the correct `user_id`. Without this,
+    /// atoms captured before sign-in are invisible on every other device forever.
+    ///
+    /// Idempotent: guarded by a UserDefaults key per (localID → authID) pair.
+    func migrateLocalUserToSignedIn() {
+        guard let authID = AuthClient.shared.session?.userID else { return }
+        let localID = AppEnv.localUserID
+        guard authID != localID else { return }
+        // Guard: only migrate once per (localID, authID) pair.
+        let migratedKey = "nous.sync.migrated.\(localID.uuidString).\(authID.uuidString)"
+        guard !UserDefaults.standard.bool(forKey: migratedKey) else { return }
+        let predicate = #Predicate<NoteEventRecord> { $0.userID == localID }
+        let fetchDesc = FetchDescriptor<NoteEventRecord>(predicate: predicate)
+        let records = (try? context.fetch(fetchDesc)) ?? []
+        if !records.isEmpty {
+            for rec in records {
+                rec.userID = authID
+                rec.synced = false   // force re-push under correct user_id
+            }
+            try? context.save()
+            NousLogger.info("sync", "migrated pre-auth events to signed-in user",
+                            ["count": "\(records.count)",
+                             "from": localID.uuidString,
+                             "to":   authID.uuidString])
+        }
+        UserDefaults.standard.set(true, forKey: migratedKey)
     }
 
     // MARK: - Public mutations
 
     /// Max capture size — guards against runaway paste (logs, binaries).
-    static let maxCaptureBytes = 64 * 1024
+    /// Meeting transcripts can reach 200KB+ for 2-hour sessions; 256KB covers that.
+    static let maxCaptureBytes = 256 * 1024
 
     @discardableResult
     func capture(raw: String, type: AtomType = .thought) -> AtomSnapshot? {
@@ -66,9 +129,14 @@ final class AtomStore {
 
     private static func normalize(_ s: String) -> String {
         var out = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Truncate by actual UTF-8 byte budget (not UTF-16/Character units, which
+        // over-truncate CJK/emoji/RTL text). Repair any grapheme split at the cut.
         if out.utf8.count > maxCaptureBytes {
-            let prefix = out.prefix(maxCaptureBytes / 4) // UTF-16 unit budget; safe upper bound
-            out = String(prefix) + "…"
+            let slice = Array(out.utf8.prefix(maxCaptureBytes))
+            var truncated = String(decoding: slice, as: UTF8.self)
+            // String(decoding:) replaces a split trailing scalar with U+FFFD; drop it.
+            if truncated.unicodeScalars.last == "\u{FFFD}" { truncated.unicodeScalars.removeLast() }
+            out = truncated + "…"
         }
         return out
     }
@@ -100,8 +168,37 @@ final class AtomStore {
                 .replacingOccurrences(of: "- [X]", with: "- [ ]", options: .literal)
         } else { return }
         let updated = lines.joined(separator: "\n")
-        let ev = NoteEvent(atomID: id, kind: .updatedRaw, payload: .init(content: updated))
+        // B6 — a checklist tick must NOT trigger a full re-refine. The displayed text comes
+        // from `refinedContent ?? rawContent`, so write the edit back to whichever field is
+        // the live source: if refined exists, emit a `.refined` event (sets isRefining=false,
+        // updates refinedContent, no refine kicked off); otherwise edit raw via a path that
+        // leaves isRefining untouched. Neither path calls startRefine().
+        if a.refinedContent != nil {
+            let ev = NoteEvent(atomID: id, kind: .refined, payload: .init(refinedContent: updated))
+            apply(ev, persist: true)
+        } else {
+            applyRawEditNoRefine(id: id, content: updated)
+        }
+    }
+
+    /// Folds a raw-content edit WITHOUT setting `isRefining` and WITHOUT triggering refine.
+    /// Used by checklist toggles (B6): `.updatedRaw`'s normal fold sets isRefining=true, which
+    /// would leave the row shimmering forever since no startRefine() follows a toggle.
+    /// We reuse the `.updatedRaw` event (no new NoteEvent kind) but clear isRefining in the
+    /// same synchronous flow after the fold.
+    private func applyRawEditNoRefine(id: UUID, content: String) {
+        let ev = NoteEvent(atomID: id, kind: .updatedRaw, payload: .init(content: content))
         apply(ev, persist: true)
+        // The fold set isRefining=true; clear it (in-memory only — transient UI state,
+        // never persisted). Skip if the event was guarded-out (atom missing/unchanged).
+        guard var a = atoms[id], a.isRefining else { return }
+        a.isRefining = false
+        atoms[id] = a
+        if let idx = ordered.firstIndex(where: { $0.id == id }) {
+            ordered[idx].isRefining = false
+        }
+        version &+= 1
+        groupCache = nil
     }
 
     func setDue(for id: UUID, days: Int) {
@@ -154,7 +251,34 @@ final class AtomStore {
 
     // MARK: - Fold
 
+    /// Field group an event mutates, for the B1 out-of-order guard.
+    /// `nil` means the event is monotonic/terminal and bypasses the guard (always applies).
+    private static func guardGroup(for kind: NoteEventKind) -> String? {
+        switch kind {
+        case .created, .updatedRaw, .refined: return "content"
+        case .typeChanged:                     return "type"
+        case .taskToggled:                     return "task"
+        case .tagged:                          return "tags"
+        case .dueSet:                          return "due"
+        case .linked, .deleted:                return nil   // monotonic / terminal
+        }
+    }
+
     private func apply(_ e: NoteEvent, persist: Bool) {
+        // B1 — out-of-order guard. For a guarded group, skip the fold entirely if this
+        // event predates the last event already applied to the same group. A brand-new
+        // atom (no stored timestamp) always applies. Bootstrap replays ascending, so the
+        // first event of each group wins correctly.
+        if let group = Self.guardGroup(for: e.kind) {
+            let key = "\(e.atomID.uuidString)|\(group)"
+            if let last = lastApplied[key], e.createdAt < last {
+                // Stale event: the row is already persisted (local path) or already in
+                // SwiftData (remote pull) — do not double-persist, just skip the mutation.
+                return
+            }
+            lastApplied[key] = e.createdAt
+        }
+
         var a = atoms[e.atomID] ?? AtomSnapshot(
             id: e.atomID, rawContent: "", refinedContent: nil,
             type: .thought, tags: [], createdAt: e.createdAt, updatedAt: e.createdAt,
@@ -166,13 +290,19 @@ final class AtomStore {
             a.type = e.payload.type ?? .thought
             a.createdAt = e.createdAt
             a.isRefining = true
+            a.refineFailed = false
         case .updatedRaw:
             a.rawContent = e.payload.content ?? a.rawContent
             a.isRefining = true
+            a.refineFailed = false
         case .refined:
             let r = e.payload.refinedContent ?? ""
             a.refinedContent = r.isEmpty ? nil : r
             a.isRefining = false
+            a.refineFailed = false
+            // B4 — track intentional revert-to-raw (empty sentinel) vs real refine.
+            if r.isEmpty { revertedAtoms.insert(e.atomID) }
+            else         { revertedAtoms.remove(e.atomID) }
         case .typeChanged:
             if let t = e.payload.type { a.type = t }
         case .tagged:
@@ -189,7 +319,8 @@ final class AtomStore {
         case .deleted:
             a.isDeleted = true
         }
-        a.updatedAt = e.createdAt
+        // updatedAt only advances, never regresses on a late-but-not-stale event.
+        a.updatedAt = max(a.updatedAt, e.createdAt)
         atoms[e.atomID] = a
         // Keep ordered in sync so stream rows see live snapshots without a full
         // rebuildOrdered(). rebuildOrdered() overwrites this when called (created/deleted).
@@ -244,10 +375,45 @@ final class AtomStore {
                 }
             } catch {
                 NousLogger.error("store", "startRefine failed", ["id": id.uuidString, "error": error.localizedDescription])
-                let ev = NoteEvent(atomID: id, kind: .refined, payload: .init(refinedContent: ""))
-                apply(ev, persist: true)
+                let failures = (self.refineFailures[id] ?? 0) + 1
+                self.refineFailures[id] = failures
+                if failures >= Self.maxRefineFailures {
+                    // Clear the shimmer after repeated failures so the row is usable.
+                    // Not persisted — bootstrap re-queues on next launch when API recovers.
+                    NousLogger.warning("store", "clearing stuck refine after \(failures) failures", ["id": id.uuidString])
+                    var a = self.atoms[id]
+                    a?.isRefining = false
+                    a?.refineFailed = true
+                    if let a { self.atoms[a.id] = a }
+                    if let idx = self.ordered.firstIndex(where: { $0.id == id }) {
+                        self.ordered[idx].isRefining = false
+                        self.ordered[idx].refineFailed = true
+                    }
+                    self.version &+= 1
+                    self.groupCache = nil
+                }
             }
         }
+    }
+
+    /// Manual retry after refine gave up (D2). Clears the failed flag in-memory, resets the
+    /// in-session failure counter, restores the shimmer, and re-queues the Gemini job against
+    /// the atom's current raw content. Transient state only — nothing persisted here; the
+    /// eventual `.refined` fold (on success) persists as usual.
+    func retryRefine(id: UUID) {
+        guard var a = atoms[id], !a.isDeleted else { return }
+        refineFailures[id] = 0
+        a.refineFailed = false
+        a.isRefining = true
+        atoms[id] = a
+        if let idx = ordered.firstIndex(where: { $0.id == id }) {
+            ordered[idx].refineFailed = false
+            ordered[idx].isRefining = true
+        }
+        version &+= 1
+        groupCache = nil
+        NousLogger.info("store", "manual refine retry", ["id": id.uuidString])
+        startRefine(id: id, raw: a.rawContent)
     }
 
     /// Manual type override from the detail view.
@@ -315,4 +481,8 @@ final class AtomStore {
     // Convenience
     var taskAtoms: [AtomSnapshot] { ordered.filter { $0.type == .task } }
     func inboundCount(of id: UUID) -> Int { inboundLinks[id]?.count ?? 0 }
+    func inboundAtoms(for id: UUID) -> [AtomSnapshot] {
+        guard let sources = inboundLinks[id] else { return [] }
+        return sources.compactMap { atoms[$0] }.filter { !$0.isDeleted }
+    }
 }

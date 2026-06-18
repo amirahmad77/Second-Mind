@@ -16,6 +16,13 @@ actor GeminiClient {
 
     init(apiKey: String = AppEnv.geminiAPIKey) { self.apiKey = apiKey }
 
+    /// Resolved key at call time: prefers RemoteConfig (fetched from Supabase
+    /// after auth) over the compile-time AppEnv value.
+    private var resolvedKey: String {
+        let remote = RemoteConfig.shared.geminiAPIKey
+        return remote.isEmpty ? apiKey : remote
+    }
+
     // MARK: Refine
 
     /// Result of one refine call: cleaned markdown body + 0–7 tags + detected type.
@@ -30,7 +37,7 @@ actor GeminiClient {
     /// Returns parsed JSON `{ refined: String, tags: [String] }` per the schema below.
     /// Tags are normalized (lowercase, hyphenated, deduped, capped at 7) before return.
     func refine(raw: String, type: AtomType = .thought) async throws -> RefineResult {
-        guard !apiKey.isEmpty else {
+        guard !resolvedKey.isEmpty else {
             NousLogger.error("gemini", "refine skipped — NOUS_GEMINI_API_KEY not set")
             throw NSError(domain: "Gemini", code: -99,
                           userInfo: [NSLocalizedDescriptionKey: "API key not configured"])
@@ -54,7 +61,7 @@ actor GeminiClient {
                         "tags": [
                             "type": "ARRAY",
                             "items": ["type": "STRING"],
-                            "maxItems": 7
+                            "maxItems": 4
                         ],
                         "type": [
                             "type": "STRING",
@@ -70,7 +77,7 @@ actor GeminiClient {
         var req = URLRequest(url: url, timeoutInterval: 20)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        req.setValue(resolvedKey, forHTTPHeaderField: "x-goog-api-key")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, resp) = try await session.data(for: req)
@@ -144,7 +151,7 @@ actor GeminiClient {
                         "tags": [
                             "type": "ARRAY",
                             "items": ["type": "STRING"],
-                            "maxItems": 7
+                            "maxItems": 4
                         ],
                         "extractedTasks": [
                             "type": "ARRAY",
@@ -167,7 +174,7 @@ actor GeminiClient {
         var req = URLRequest(url: url, timeoutInterval: 25)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        req.setValue(resolvedKey, forHTTPHeaderField: "x-goog-api-key")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, resp) = try await session.data(for: req)
@@ -227,7 +234,7 @@ actor GeminiClient {
         case .thought:
             return """
             First line: core insight as a stream-ready headline (≤90 chars, no filler). \
-            Body: 1–3 lines with **bold** key terms; prose default, bullets for 3+ items. ≤150 words.
+            Body: clear prose expanding the idea; use **bold** for key terms, bullets when listing items. ≤150 words.
             """
         case .task:
             return """
@@ -257,6 +264,119 @@ actor GeminiClient {
         }
     }
 
+    // MARK: Meeting transcription (audio → diarized transcript)
+
+    /// Sends mic + optional system-audio data to Gemini Flash 1.5 for transcription
+    /// with speaker diarization.
+    ///
+    /// - `micData`  : raw audio bytes recorded from the user's microphone (m4a / aac).
+    /// - `sysData`  : raw audio bytes from ScreenCaptureKit system audio (optional).
+    ///
+    /// Returns a structured transcript:
+    ///   "You: <text>\nSpeaker 1: <text>\nSpeaker 2: <text>…"
+    ///
+    /// Uses gemini-1.5-flash which explicitly supports long-form audio input.
+    /// Inline data cap ~20 MB; at 32 kbps AAC that covers ~83 min combined audio.
+    func transcribeMeeting(micData: Data, sysData: Data?) async throws -> String {
+        guard !resolvedKey.isEmpty else {
+            throw NSError(domain: "Gemini.transcribe", code: -99,
+                          userInfo: [NSLocalizedDescriptionKey: "API key not configured"])
+        }
+
+        var parts: [[String: Any]] = []
+
+        // Track 1: microphone (always present)
+        parts.append([
+            "inline_data": [
+                "mime_type": "audio/mp4",
+                "data": micData.base64EncodedString()
+            ]
+        ])
+
+        // Track 2: system audio (call participants)
+        if let sysData, !sysData.isEmpty {
+            parts.append([
+                "inline_data": [
+                    "mime_type": "audio/mp4",
+                    "data": sysData.base64EncodedString()
+                ]
+            ])
+            parts.append([
+                "text": """
+                You have two audio tracks from a meeting.
+                Track 1 is the user's microphone — label all speech on this track as "You:".
+                Track 2 is the meeting's system audio (other participants on the call).
+                  Identify distinct voices in Track 2 and label them "Speaker 1:", "Speaker 2:", etc.
+                  Use consistent labels across the full transcript.
+                Merge both tracks into a single chronological transcript ordered by when things
+                were said. If the same moment appears on both tracks, prefer Track 2 for other
+                speakers and Track 1 for the user's voice to avoid duplication.
+                Format: one utterance per line, label first.
+                Example:
+                  You: We should ship the freemium tier by end of Q2.
+                  Speaker 1: Agreed. What's the biggest risk?
+                  You: Probably onboarding flow — we haven't tested it at scale.
+                Output the transcript only, no preamble.
+                """
+            ])
+        } else {
+            // Mic-only: still transcribe and label as "You:"
+            parts.append([
+                "text": """
+                Transcribe this audio recording. The speaker is the user.
+                Label each utterance as "You:".
+                Output the transcript only, one utterance per line.
+                """
+            ])
+        }
+
+        let body: [String: Any] = [
+            "contents": [
+                ["role": "user", "parts": parts]
+            ],
+            "generationConfig": [
+                "temperature": 0.0   // deterministic for transcription
+            ]
+        ]
+
+        // gemini-1.5-flash supports long audio; 2.0-flash also works but 1.5 is more
+        // widely tested for audio diarization tasks.
+        let model = "gemini-1.5-flash-latest"
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")!
+
+        // Longer timeouts — large audio payloads can take 30–90s to process
+        var req = URLRequest(url: url, timeoutInterval: 120)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(resolvedKey, forHTTPHeaderField: "x-goog-api-key")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        NousLogger.info("gemini", "transcribeMeeting uploading",
+                        ["mic_kb": micData.count / 1024,
+                         "sys_kb": (sysData?.count ?? 0) / 1024])
+
+        let (data, resp) = try await session.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            NousLogger.error("gemini", "transcribeMeeting HTTP \(status)",
+                             ["body": String(body.prefix(400))])
+            throw NSError(domain: "Gemini.transcribe", code: status,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(status): \(body.prefix(200))"])
+        }
+
+        struct Part:    Decodable { let text: String? }
+        struct Content: Decodable { let parts: [Part]? }
+        struct Cand:    Decodable { let content: Content? }
+        struct Resp:    Decodable { let candidates: [Cand]? }
+        let envelope = try JSONDecoder().decode(Resp.self, from: data)
+        let transcript = envelope.candidates?.first?.content?.parts?
+            .compactMap(\.text).joined() ?? ""
+
+        NousLogger.info("gemini", "transcribeMeeting done", ["chars": transcript.count])
+        return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: Embed
 
     /// Returns 768-dim vector (MRL truncated) or nil.
@@ -284,7 +404,7 @@ actor GeminiClient {
         var req = URLRequest(url: url, timeoutInterval: 15)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        req.setValue(resolvedKey, forHTTPHeaderField: "x-goog-api-key")
         req.httpBody = try JSONEncoder.nous.encode(body)
 
         let (data, resp) = try await session.data(for: req)
@@ -293,6 +413,61 @@ actor GeminiClient {
         }
         let decoded = try JSONDecoder.nous.decode(Resp.self, from: data)
         return decoded.embedding.values
+    }
+
+    // MARK: - Synthesis
+
+    /// Synthesizes an answer to a question grounded in the user's atoms.
+    /// `context` is a pre-built string of the top-K relevant atoms.
+    func synthesizeAnswer(question: String, context: String) async throws -> String {
+        guard !resolvedKey.isEmpty else {
+            throw NSError(domain: "Gemini.synthesize", code: -99,
+                          userInfo: [NSLocalizedDescriptionKey: "API key not configured"])
+        }
+        let prompt: String
+        if context.isEmpty {
+            prompt = """
+            You are a personal AI assistant. The user has a knowledge graph of their thoughts, tasks, and notes.
+            No relevant atoms were found for this question — give a brief, honest answer.
+            Question: \(question)
+            """
+        } else {
+            prompt = """
+            You are a personal AI assistant synthesizing from the user's own knowledge graph.
+            The following atoms are the most relevant entries from their vault:
+
+            \(context)
+
+            Answer the user's question grounded in these atoms. Cite specific details. \
+            If the atoms don't fully answer it, say what you found and what's missing.
+            Question: \(question)
+            """
+        }
+        let body: [String: Any] = [
+            "contents": [["role": "user", "parts": [["text": prompt]]]],
+            "generationConfig": ["temperature": 0.5, "maxOutputTokens": 1024]
+        ]
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(AppEnv.geminiRefineModel):generateContent")!
+        var req = URLRequest(url: url, timeoutInterval: 30)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(resolvedKey, forHTTPHeaderField: "x-goog-api-key")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, resp) = try await session.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            NousLogger.error("gemini", "synthesize HTTP \(status)", ["body": String(bodyStr.prefix(300))])
+            throw NSError(domain: "Gemini.synthesize", code: status,
+                          userInfo: [NSLocalizedDescriptionKey: "Gemini error \(status)"])
+        }
+        struct Part: Decodable { let text: String }
+        struct Content: Decodable { let parts: [Part]? }
+        struct Candidate: Decodable { let content: Content? }
+        struct GResp: Decodable { let candidates: [Candidate]? }
+        let decoded = try JSONDecoder.nous.decode(GResp.self, from: data)
+        return decoded.candidates?.first?.content?.parts?.first?.text ?? ""
     }
 
     // MARK: - Type-specific system prompts
@@ -309,9 +484,12 @@ actor GeminiClient {
     }
 
     private static let tagRules = """
-    TAGS: 3–7 tags mixing topic, entity (person/project/product), and semantic kind. \
-    Lowercase, hyphen-separated, no #, no emoji. Skip verb-only tags or tags that restate \
-    the atom type. Return [] if the input is too short or trivial.
+    TAGS: 1–4 tags. Quality beats quantity — 2 precise tags are better than 5 vague ones.
+    SPECIFIC > GENERIC: "supabase-rls" not "database"; "openai-board-dispute" not "artificial-intelligence"; "q2-launch" not "business".
+    Max 2 proper nouns (people, companies, products, places) — pick the most central only.
+    NEVER use: ai, artificial-intelligence, technology, tech, software, ideas, thoughts, notes, analysis, research, knowledge-management, productivity, workflow, process, system, content, data, misc, general, information, interesting, narrative, formatting, testing.
+    Never restate the atom type ("task", "meeting", "decision", etc.).
+    Return [] if the content is too short or nothing specific stands out.
     """
 
     private static let streamHeadlineRule = """
@@ -340,26 +518,32 @@ actor GeminiClient {
 
     If thought:
     \(streamHeadlineRule)
-    Body: 1–3 lines expanding why it matters. **bold** 1–2 key terms. Prose default, `- ` bullets for 3+ items. `> ` for quotes. ≤150 words.
+    Body: expand the idea in clear prose. Use markdown naturally — **bold** key terms,
+    `- ` bullets when listing items, `> ` for quotes. ≤150 words.
 
     If task:
     First line = group title or single-action name (≤60 chars, no `- [ ]` prefix).
-    Body: `- [ ] <action>` per step. Preserve exact wording.
+    Body: one `- [ ] <action>` per line. Preserve exact wording.
 
     If question:
-    First line = sharpened question ending with "?". Body: 2–3 `- ` exploration bullets. ≤100 words.
+    First line = sharpened question ending with "?".
+    Body: 2–3 `- ` exploration bullets, each on its own line.
+    ≤100 words.
 
     If meeting:
     First line = `<topic> — <key outcome>` (≤90 chars).
-    Body: ## decisions / ## action items / ## open questions. Omit empty sections. ≤250 words.
+    Body: use `## decisions`, `## action items`, `## open questions` as section headers.
+    Under each header use `- ` bullets. Omit empty sections. ≤250 words.
 
     If decision:
     First line = `Decided: <what was decided>` (≤80 chars).
-    Body: **Why:** rationale + alternatives bullets. ≤120 words.
+    Body: blank line, then `**Why:** <rationale>`, blank line, then alternatives as `- ` bullets.
+    ≤120 words.
 
     If reference:
     First line = descriptive title naming what was saved (≤80 chars).
-    Body: 1–3 context lines, preserve URLs, `> ` for key quotes. ≤120 words.
+    Body: blank line between each context line. Preserve URLs. Use `> ` for key quotes.
+    ≤120 words.
 
     \(tagRules)
     """
@@ -381,7 +565,7 @@ actor GeminiClient {
     - Never invent sub-tasks that weren't implied.
     - Single-action atoms: the body IS the `- [ ] <action>` line, preceded by the headline.
 
-    TAGS: 2–5 tags. Topic + project/area. Skip pure action verbs.
+    TAGS: 1–3 tags. Project name or area + one specific topic. No vague meta-tags.
     """
 
     private static let questionPrompt = """
@@ -400,8 +584,14 @@ actor GeminiClient {
     """
 
     private static let meetingPrompt = """
-    You refine raw meeting notes into a structured, scannable summary.
+    You refine a raw meeting transcript into a structured, scannable summary.
     Output: { "refined": string, "tags": string[], "type": "meeting" }
+
+    The transcript may begin with a "Meeting participants: ..." line listing attendees.
+    It uses labels like "You:", "Speaker 1:", "Speaker 2:", etc.
+    If participant names are listed, use them to replace generic "Speaker N:" labels
+    where you can infer the match from context (topics, names mentioned, etc.).
+    Never force a name assignment if context is ambiguous.
 
     STREAM HEADLINE (first line): `<topic> — <key outcome or status>` (≤90 chars). \
     Examples: "Pricing review — decided to ship freemium tier", \
@@ -414,7 +604,7 @@ actor GeminiClient {
     - `## open questions` — unresolved threads as `- ` bullets. Omit if none.
     - Omit empty sections entirely. Total ≤250 words.
 
-    TAGS: 3–6 tags. Project, people present, topic.
+    TAGS: 1–3 tags. Project name + key decision topic. Max 1 person tag (most central attendee only).
     """
 
     private static let decisionPrompt = """
@@ -449,23 +639,38 @@ actor GeminiClient {
     - If a key quote exists, use `> ` blockquote syntax.
     - Total ≤120 words.
 
-    TAGS: 3–6 tags. Topic, domain, format (article, video, tool, paper, book, etc.).
+    TAGS: 1–3 tags. Specific topic + format (article, video, tool, paper, book). Skip generic domain tags.
     """
 }
 
 // MARK: - Tag normalization
 
 enum TagNormalizer {
-    /// Lowercase, collapse whitespace → hyphens, strip non-`[a-z0-9-]`, dedupe, cap 7.
+    /// Tags that are too generic to be useful for retrieval.
+    /// Last-resort filter — the prompt already instructs Gemini to avoid these.
+    private static let blocklist: Set<String> = [
+        "ai", "artificial-intelligence", "technology", "tech", "software", "app",
+        "ideas", "thoughts", "notes", "note", "idea", "thought",
+        "analysis", "research", "knowledge-management", "knowledge",
+        "productivity", "workflow", "process", "system", "systems",
+        "content", "data", "information", "info",
+        "misc", "general", "other", "various",
+        "interesting", "important", "useful",
+        "narrative", "formatting", "testing", "documentation", "docs",
+        "work", "project", "task", "tasks",
+        "personal", "life", "daily", "update"
+    ]
+
+    /// Lowercase, collapse whitespace → hyphens, strip non-`[a-z0-9-]`, dedupe, cap 4.
     static func normalize(_ raw: [String]) -> [String] {
         var seen = Set<String>()
         var out: [String] = []
         for r in raw {
             let n = normalizeOne(r)
-            guard !n.isEmpty, !seen.contains(n) else { continue }
+            guard !n.isEmpty, !seen.contains(n), !blocklist.contains(n) else { continue }
             seen.insert(n)
             out.append(n)
-            if out.count >= 7 { break }
+            if out.count >= 4 { break }
         }
         return out
     }

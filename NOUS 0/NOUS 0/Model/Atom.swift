@@ -36,6 +36,9 @@ nonisolated struct AtomSnapshot: Identifiable, Hashable, Sendable {
     /// task-specific
     var taskDone: Bool?
     var dueAt: Date?
+    /// Transient (never persisted): set when refine gives up after repeated failures,
+    /// cleared on a fresh/edited/successfully-refined fold or on manual retry.
+    var refineFailed: Bool = false
 
     var displayContent: String { refinedContent ?? rawContent }
 

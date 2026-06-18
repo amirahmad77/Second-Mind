@@ -64,17 +64,6 @@ struct SignInView: View {
                     NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
                 }
             }
-            // AppKit-level mouse monitor: logs BEFORE SwiftUI gesture system sees the event.
-            // If this fires but button still doesn't respond → SwiftUI gesture layer broken.
-            // If this never fires → NSWindow.ignoresMouseEvents or a covering window.
-            let _ = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
-                NousLogger.info("auth", "AppKit mouseDown", [
-                    "x": "\(Int(event.locationInWindow.x))",
-                    "y": "\(Int(event.locationInWindow.y))",
-                    "window": event.window?.identifier?.rawValue ?? "nil"
-                ])
-                return event  // always propagate — never swallow
-            }
             #endif
             withAnimation(.timingCurve(0.23, 1.0, 0.32, 1.0, duration: 0.42)) {
                 wordmarkVisible = true
@@ -148,12 +137,16 @@ struct SignInView: View {
             // ever sees it. We overlay a transparent AppKit NSView whose mouseDown
             // fires unconditionally — including on that focus click — bypassing
             // the SwiftUI hit-testing and gesture pipeline entirely.
-            .overlay(MacClickOverlay { if !auth.isSigningIn { startSignIn() } })
+            .overlay(MacClickOverlay { if !auth.isSigningIn { startSignIn() } }
+                .accessibilityLabel("Continue with Google")
+                .accessibilityAddTraits(.isButton))
             #else
             .overlay(Button("") { startSignIn() }
                 .buttonStyle(SignInPressStyle())
                 .disabled(auth.isSigningIn)
-                .opacity(0))
+                .opacity(0)
+                .accessibilityLabel("Continue with Google")
+                .accessibilityAddTraits(.isButton))
             .onTapGesture { if !auth.isSigningIn { startSignIn() } }
             #endif
             .padding(.bottom, NSpace.md)
@@ -199,8 +192,8 @@ struct SignInView: View {
                 .font(NFont.mono(9))
                 .foregroundStyle(NSColorToken.textGhost.opacity(0.6))
             Link("privacy policy", destination: URL(string: "https://nous.app/privacy")!)
-                .font(NFont.mono(9))
-                .foregroundStyle(NSColorToken.textGhost.opacity(0.45))
+                .font(NFont.mono(11))
+                .foregroundStyle(NSColorToken.textGhostDim)
         }
         .padding(.top, NSpace.xs)
     }

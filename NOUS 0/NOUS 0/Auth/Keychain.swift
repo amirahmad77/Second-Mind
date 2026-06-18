@@ -16,10 +16,12 @@ enum Keychain {
             kSecClass as String:        kSecClassGenericPassword,
             kSecAttrAccount as String:  key,
             kSecValueData as String:    data,
-            // After-first-unlock: available to background sync (SyncDaemon) once
-            // user has unlocked once after reboot. Stronger than always-available,
-            // weaker than when-unlocked. Right balance for an offline-tolerant app.
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            // After-first-unlock, this-device-only: available to background sync
+            // (SyncDaemon) once the user has unlocked once after reboot, but the
+            // item is excluded from iCloud Keychain backup/migration — the auth
+            // token never leaves this device. Right balance for an offline-tolerant
+            // app that must not leak credentials to other devices.
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
     }

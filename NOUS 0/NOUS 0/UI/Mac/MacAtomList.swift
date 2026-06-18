@@ -54,13 +54,15 @@ struct MacAtomList: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(NSColorToken.textGhost)
                 .imageScale(.small)
+                .accessibilityHidden(true)
             TextField("", text: $searchText, prompt: Text("// filter")
                 .font(NFont.mono(12))
-                .foregroundStyle(NSColorToken.textGhost.opacity(0.5))
+                .foregroundStyle(NSColorToken.textGhostDim)
             )
             .font(NFont.mono(12))
             .foregroundStyle(NSColorToken.textPrimary)
             .textFieldStyle(.plain)
+            .accessibilityLabel("Filter atoms")
 
             if !searchText.isEmpty {
                 Button { searchText = "" } label: {
@@ -81,18 +83,19 @@ struct MacAtomList: View {
                     ForEach(group.atoms) { atom in
                         MacAtomRow(
                             atom: atom,
-                            isSelected: selectedAtomID == atom.id
+                            isSelected: selectedAtomID == atom.id,
+                            inboundCount: store.inboundCount(of: atom.id)
                         )
                         .tag(atom.id)
                         .listRowBackground(
                             selectedAtomID == atom.id
-                                ? NSColorToken.inkRaised
+                                ? NSColorToken.inkRaised.opacity(0.8)
                                 : Color.clear
                         )
                         .listRowInsets(EdgeInsets(
-                            top: NSpace.xs,
-                            leading: NSpace.md,
-                            bottom: NSpace.xs,
+                            top: 0,
+                            leading: 0,
+                            bottom: 0,
                             trailing: NSpace.md
                         ))
                         .contextMenu {
@@ -113,6 +116,7 @@ struct MacAtomList: View {
                         .font(NFont.mono(10))
                         .foregroundStyle(NSColorToken.textGhost)
                         .textCase(nil)
+                        .accessibilityAddTraits(.isHeader)
                 }
             }
         }
@@ -132,7 +136,7 @@ struct MacAtomList: View {
             if searchText.isEmpty {
                 Text("⌘N to capture your first thought")
                     .font(NFont.mono(10))
-                    .foregroundStyle(NSColorToken.textGhost.opacity(0.55))
+                    .foregroundStyle(NSColorToken.textGhostDim)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -193,62 +197,72 @@ private struct MacDayGroup {
 private struct MacAtomRow: View {
     let atom: AtomSnapshot
     let isSelected: Bool
+    var inboundCount: Int = 0
 
     var body: some View {
-        HStack(alignment: .top, spacing: NSpace.sm) {
-            // Type dot
-            Circle()
-                .fill(atom.type.phosphor)
-                .frame(width: 6, height: 6)
-                .shadow(color: atom.type.phosphor.opacity(0.50), radius: 4)
-                .padding(.top, 5)
+        HStack(alignment: .top, spacing: 0) {
+            // P3: 2px phosphor left-edge accent on selection
+            Rectangle()
+                .fill(isSelected ? atom.type.phosphor.opacity(0.75) : Color.clear)
+                .frame(width: 2)
+                .animation(.nEaseOutQuint, value: isSelected)
 
-            VStack(alignment: .leading, spacing: 2) {
-                // One-liner
-                Text(atom.oneLiner)
-                    .font(NFont.body(13))
-                    .foregroundStyle(isSelected
-                        ? NSColorToken.textPrimary
-                        : NSColorToken.textSecondary)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .contentTransition(.opacity)
+            HStack(alignment: .top, spacing: NSpace.sm) {
+                // Type dot
+                Circle()
+                    .fill(atom.type.phosphor)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: atom.type.phosphor.opacity(isSelected ? 0.60 : 0.35), radius: 4)
+                    .padding(.top, 5)
+                    .accessibilityHidden(true)
 
-                // Meta line
-                HStack(spacing: NSpace.xs) {
-                    Text(metaLine)
-                        .font(NFont.mono(10))
-                        .foregroundStyle(NSColorToken.textGhost)
-                        .monospacedDigit()
+                VStack(alignment: .leading, spacing: NSpace.xs) {
+                    // One-liner — full weight always
+                    Text(atom.oneLiner)
+                        .font(NFont.body(13))
+                        .foregroundStyle(NSColorToken.textPrimary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .contentTransition(.opacity)
 
-                    if atom.isRefining {
-                        Text("// refining")
+                    // P1: Meta line — ghost, clearly subordinate
+                    HStack(spacing: NSpace.xs) {
+                        Text(atom.createdAt.formatted(date: .omitted, time: .shortened))
                             .font(NFont.mono(10))
-                            .foregroundStyle(NSColorToken.Phos.amber.opacity(0.65))
-                    }
-                }
+                            .foregroundStyle(NSColorToken.textGhostDim)
+                            .monospacedDigit()
 
-                // Tags (if any)
-                if !atom.tags.isEmpty {
-                    TagFlow(hSpacing: NSpace.xs, vSpacing: 2) {
-                        ForEach(atom.tags, id: \.self) { tag in
-                            TagChip(value: tag.value,
-                                    phosphor: atom.type.phosphor,
-                                    compact: true)
+                        // P4: Inbound count — "← N" not "↩N"
+                        if inboundCount > 0 {
+                            Text("· ← \(inboundCount)")
+                                .font(NFont.mono(10))
+                                .foregroundStyle(atom.type.phosphor.opacity(0.40))
+                                .monospacedDigit()
+                        }
+
+                        if atom.isRefining {
+                            Text("· refining")
+                                .font(NFont.mono(10))
+                                .foregroundStyle(atom.type.phosphor.opacity(0.50))
                         }
                     }
-                    .frame(height: 12)
-                    .clipped()
+
+                    // Tags — flat ghost text, minimal footprint
+                    if !atom.tags.isEmpty {
+                        Text(atom.tags.prefix(3).map(\.value).joined(separator: " · "))
+                            .font(NFont.mono(9))
+                            .foregroundStyle(NSColorToken.textGhostDim)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
+
+                Spacer(minLength: 0)
             }
-
-            Spacer(minLength: 0)
+            // P2: More breathing room
+            .padding(.vertical, NSpace.sm)
+            .padding(.leading, NSpace.sm)
         }
-        .padding(.vertical, 2)
-    }
-
-    private var metaLine: String {
-        atom.createdAt.formatted(date: .omitted, time: .shortened)
     }
 }
 

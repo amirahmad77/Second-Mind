@@ -358,7 +358,7 @@ struct MacRootView: View {
         guard store == nil else { return }
         Task { await RemoteConfig.shared.fetch() }
         let sync = SyncDaemon(context: ctx, supabase: supabase, gemini: gemini)
-        let store = AtomStore(context: ctx, sync: sync, gemini: gemini)
+        let store = AtomStore(context: ctx, sync: sync, gemini: gemini, backend: backend)
         store.bootstrap()
         sync.onRemoteEvent = { [weak store] e in store?.applyRemoteEvent(e) }
         sync.bootstrap()

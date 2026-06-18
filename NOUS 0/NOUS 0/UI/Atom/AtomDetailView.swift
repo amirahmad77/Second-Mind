@@ -110,6 +110,8 @@ struct AtomDetailView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Delete atom")
                 .accessibilityHint("Removes this atom permanently")
+
+                shareControl
             }
             Button(action: close) {
                 Image(systemName: "chevron.down")
@@ -125,6 +127,40 @@ struct AtomDetailView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Close")
         }
+    }
+
+    // MARK: – Share
+
+    /// Ghost share affordance matching the top-right control idiom. Exports the
+    /// current atom as Markdown. `ShareLink` offers both the inline text and the
+    /// generated `.md` temp file (the system share sheet chooses per target).
+    @ViewBuilder private var shareControl: some View {
+        let md = AtomExport.markdown(atom)
+        let item = SharePreview("\(atom.type.label) · note", image: Image(systemName: "doc.text"))
+        if let fileURL = AtomExport.temporaryFile(name: "\(AtomExport.fileStem(for: atom)).md", contents: md) {
+            ShareLink(item: fileURL, subject: Text("\(atom.type.label) · note"), message: Text(md), preview: item) {
+                shareGlyph
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Share atom")
+            .accessibilityHint("Exports this atom as Markdown")
+        } else {
+            // Fallback: share the Markdown text directly if the temp file couldn't be written.
+            ShareLink(item: md, subject: Text("\(atom.type.label) · note"), preview: item) {
+                shareGlyph
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Share atom")
+            .accessibilityHint("Exports this atom as Markdown")
+        }
+    }
+
+    private var shareGlyph: some View {
+        Image(systemName: "square.and.arrow.up")
+            .font(.system(size: 11, weight: .light))
+            .foregroundStyle(NSColorToken.textGhost.opacity(0.6))
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
     // MARK: – Content scroll

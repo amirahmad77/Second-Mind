@@ -1,32 +1,24 @@
 import Foundation
 import Observation
 
-/// Drives a synthesis session: question → SSE stream → progressive answer + citations.
-/// Stream cancellable mid-flight (PRD §2.4 "user can interrupt/regenerate").
+/// Drives a synthesis session: embed question → local cosine search → Gemini answer.
+/// All network calls go directly to Gemini — no external backend required.
 @Observable
 @MainActor
 final class SynthesisVM {
-
-    // Axiom log contract — category: "synthesis"
-    //   submit      q_len, user
-    //   stage       stage (embed|retrieve|synthesize|streaming)
-    //   done        citations, answer_len, elapsed_ms
-    //   failed      error, elapsed_ms
-    //   cancelled   elapsed_ms (0 if not yet started)
 
     enum Stage: Equatable {
         case idle
         case embedding
         case retrieving
         case synthesizing
-        case streaming
         case done
         case failed(String)
     }
 
     struct Citation: Identifiable, Hashable {
-        let id: UUID          // atomID
-        let snippet: String   // already prefixed [N]
+        let id: UUID
+        let snippet: String
         let score: Double
     }
 
@@ -34,27 +26,30 @@ final class SynthesisVM {
     private(set) var stage: Stage = .idle
     private(set) var answer: String = ""
     private(set) var citations: [Citation] = []
-    private(set) var stageDetail: String?
 
     var canSubmit: Bool {
-        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.count >= 2 && stage.isInteractive
+        question.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
+            && stage.isInteractive
     }
     var isStreaming: Bool {
         switch stage {
-        case .embedding, .retrieving, .synthesizing, .streaming: return true
+        case .embedding, .retrieving, .synthesizing: return true
         default: return false
         }
     }
 
-    private let backend: NousBackendClient
-    private let userID: UUID
+    private let gemini: GeminiClient
+    private let store: AtomStore
+    private let fetchEmbeddings: @MainActor () -> [(atomID: UUID, vector: [Float])]
     private var task: Task<Void, Never>?
     private var submitTime: Date?
 
-    init(backend: NousBackendClient, userID: UUID) {
-        self.backend = backend
-        self.userID = userID
+    init(gemini: GeminiClient,
+         store: AtomStore,
+         fetchEmbeddings: @escaping @MainActor () -> [(atomID: UUID, vector: [Float])]) {
+        self.gemini = gemini
+        self.store = store
+        self.fetchEmbeddings = fetchEmbeddings
     }
 
     func submit() {
@@ -63,36 +58,53 @@ final class SynthesisVM {
         cancel()
         answer = ""
         citations = []
-        stageDetail = nil
         stage = .embedding
         submitTime = Date()
 
-        NousLogger.info("synthesis", "submit", [
-            "q_len": q.count,
-            "user": userID.uuidString,
-        ])
+        NousLogger.info("synthesis", "submit", ["q_len": q.count])
 
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                let stream = try await self.backend.synthesize(
-                    userID: self.userID,
-                    question: q,
-                    contextLimit: 12
-                )
-                for try await ev in stream {
-                    if Task.isCancelled { break }
-                    self.handle(ev)
+                // 1. Embed the question. Use the asymmetric RETRIEVAL_QUERY task
+                //    type — stored atoms are indexed as RETRIEVAL_DOCUMENT, so the
+                //    query must use the matching query-side projection.
+                let qVec = try await gemini.embed(q, taskType: .query)
+
+                if Task.isCancelled { return }
+
+                // 2. Cosine search against local embeddings
+                self.stage = .retrieving
+                let allEmbs = self.fetchEmbeddings()
+                let topAtoms = self.topK(query: qVec, embeddings: allEmbs, k: 12)
+                self.citations = topAtoms.compactMap { id, score -> Citation? in
+                    guard let atom = self.store.atoms[id] else { return nil }
+                    return Citation(id: id,
+                                    snippet: String(atom.displayContent.prefix(200)),
+                                    score: score)
                 }
-                if !Task.isCancelled {
-                    self.stage = .done
-                    NousLogger.info("synthesis", "done", [
-                        "citations": self.citations.count,
-                        "answer_len": self.answer.count,
-                        "elapsed_ms": self.elapsedMs,
-                    ])
-                }
+
+                // 3. Build context string
+                let context = topAtoms.compactMap { id, _ -> String? in
+                    guard let atom = self.store.atoms[id] else { return nil }
+                    return "[\(atom.type.label.uppercased())] \(atom.displayContent)"
+                }.joined(separator: "\n\n")
+
+                // 4. Synthesize via Gemini
+                self.stage = .synthesizing
+                let result = try await gemini.synthesizeAnswer(question: q, context: context)
+
+                if Task.isCancelled { return }
+                self.answer = result
+                self.stage = .done
+
+                NousLogger.info("synthesis", "done", [
+                    "citations": self.citations.count,
+                    "answer_len": result.count,
+                    "elapsed_ms": self.elapsedMs,
+                ])
             } catch {
+                guard !Task.isCancelled else { return }
                 NousLogger.error("synthesis", "failed", [
                     "error": error.localizedDescription,
                     "elapsed_ms": self.elapsedMs,
@@ -106,10 +118,7 @@ final class SynthesisVM {
         let wasStreaming = isStreaming
         task?.cancel()
         task = nil
-        if wasStreaming {
-            NousLogger.info("synthesis", "cancelled", ["elapsed_ms": elapsedMs])
-            stage = .idle
-        }
+        if wasStreaming { stage = .idle }
     }
 
     func reset() {
@@ -118,46 +127,34 @@ final class SynthesisVM {
         answer = ""
         citations = []
         stage = .idle
-        stageDetail = nil
     }
 
-    // MARK: - Event handling
+    // MARK: - Vector search
 
-    private func handle(_ ev: NousBackendClient.NousSSEEvent) {
-        switch ev {
-        case .update(let stageName, let detail):
-            self.stageDetail = detail
-            switch stageName {
-            case "embed":
-                self.stage = .embedding
-                NousLogger.info("synthesis", "stage", ["stage": "embed"])
-            case "retrieve":
-                self.stage = .retrieving
-                NousLogger.info("synthesis", "stage", ["stage": "retrieve"])
-            case "synthesize":
-                self.stage = .synthesizing
-                NousLogger.info("synthesis", "stage", ["stage": "synthesize"])
-            default:
-                break
+    private func topK(query: [Float],
+                      embeddings: [(atomID: UUID, vector: [Float])],
+                      k: Int) -> [(UUID, Double)] {
+        guard !query.isEmpty else { return [] }
+        let qNorm = norm(query)
+        guard qNorm > 0 else { return [] }
+        return embeddings
+            .compactMap { entry -> (UUID, Double)? in
+                let v = entry.vector
+                guard v.count == query.count else { return nil }
+                let dot = zip(query, v).map { Double($0) * Double($1) }.reduce(0, +)
+                let vNorm = Double(norm(v))
+                guard vNorm > 0 else { return nil }
+                return (entry.atomID, dot / (Double(qNorm) * vNorm))
             }
-        case .citation(let id, let snippet, let score):
-            self.citations.append(Citation(id: id, snippet: snippet, score: score))
-        case .token(let chunk):
-            if self.stage != .streaming {
-                self.stage = .streaming
-                NousLogger.info("synthesis", "stage", [
-                    "stage": "streaming",
-                    "citations": self.citations.count,
-                    "elapsed_ms": elapsedMs,
-                ])
-            }
-            self.answer += chunk
-        case .done:
-            self.stage = .done
-        }
+            .filter { $0.1 > 0.45 }
+            .sorted { $0.1 > $1.1 }
+            .prefix(k)
+            .map { ($0.0, $0.1) }
     }
 
-    // MARK: - Helpers
+    private func norm(_ v: [Float]) -> Float {
+        v.reduce(0) { $0 + $1 * $1 }.squareRoot()
+    }
 
     private var elapsedMs: Int {
         guard let t = submitTime else { return 0 }

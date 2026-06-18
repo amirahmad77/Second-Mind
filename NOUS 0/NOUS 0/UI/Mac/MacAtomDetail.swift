@@ -1,5 +1,7 @@
 #if os(macOS)
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 // ─── MacAtomDetail ────────────────────────────────────────────────────────────
 //
@@ -146,6 +148,23 @@ struct MacAtomDetail: View {
                     .keyboardShortcut(.escape, modifiers: [])
                 }
 
+                // Export — Markdown (default) or JSON, via NSSavePanel.
+                if !editMode {
+                    Menu {
+                        Button("Markdown (.md)") { exportAtom(asJSON: false) }
+                        Button("JSON (.json)")   { exportAtom(asJSON: true) }
+                    } label: {
+                        Text("// export")
+                            .font(NFont.mono(10))
+                            .foregroundStyle(NSColorToken.textGhost)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Export atom to disk")
+                    .accessibilityLabel("Export atom")
+                }
+
                 // Delete
                 if !editMode {
                     Button {
@@ -202,6 +221,35 @@ struct MacAtomDetail: View {
                                         phosphor: atom.type.phosphor)
                             }
                         }
+                    }
+                }
+
+                // Also-see suggestions
+                let suggestions = store.linkSuggestions[atom.id] ?? []
+                if !suggestions.isEmpty {
+                    AlsoSeeStrip(atomID: atom.id, suggestions: suggestions, store: store)
+                }
+
+                // Linked-from (backlinks)
+                let inbound = store.inboundAtoms(for: atom.id)
+                if !inbound.isEmpty {
+                    LinkedFromSection(inbound: inbound) { a in
+                        onPickRelated?(a)
+                    }
+                }
+
+                // Speaker relabeling — only for meeting atoms with unresolved "Speaker N:" labels
+                if atom.type == .meeting, !atom.isRefining {
+                    let content = atom.refinedContent ?? atom.rawContent
+                    let unresolved = SpeakerRelabelPanel.unresolvedSpeakers(in: content)
+                    if !unresolved.isEmpty {
+                        SpeakerRelabelPanel(
+                            speakers: unresolved,
+                            onRename: { old, new in
+                                let updated = content.replacingOccurrences(of: "\(old):", with: "\(new):")
+                                store.updateRaw(id: atom.id, newContent: updated)
+                            }
+                        )
                     }
                 }
 
@@ -306,6 +354,128 @@ struct MacAtomDetail: View {
         store.updateRaw(id: atom.id, newContent: trimmed)
         editMode = false
         NousLogger.info("mac", "atom edited", ["id": atom.id.uuidString])
+    }
+
+    // MARK: – Export
+
+    private func exportAtom(asJSON: Bool) {
+        let stem = AtomExport.fileStem(for: atom)
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        if asJSON {
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = "\(stem).json"
+        } else {
+            panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+            panel.nameFieldStringValue = "\(stem).md"
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let data = asJSON
+            ? AtomExport.json([atom])
+            : Data(AtomExport.markdown(atom).utf8)
+        do {
+            try data.write(to: url, options: .atomic)
+            NousLogger.info("export", "atom exported", [
+                "id": atom.id.uuidString,
+                "format": asJSON ? "json" : "markdown"
+            ])
+        } catch {
+            NousLogger.error("export", "atom export failed", [
+                "id": atom.id.uuidString,
+                "error": error.localizedDescription
+            ])
+        }
+    }
+}
+
+// MARK: – SpeakerRelabelPanel
+
+/// Shown on meeting atoms that still have unresolved "Speaker N:" labels.
+/// Each row: "Speaker 1" → editable name field → confirm replaces all occurrences.
+struct SpeakerRelabelPanel: View {
+    let speakers:  [String]          // e.g. ["Speaker 1", "Speaker 2"]
+    let onRename:  (String, String) -> Void   // (old label, new name)
+
+    @State private var names: [String: String] = [:]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NSpace.sm) {
+            HStack(spacing: NSpace.xs) {
+                Circle()
+                    .fill(NSColorToken.Phos.amber.opacity(0.7))
+                    .frame(width: 4, height: 4)
+                Text("// identify speakers")
+                    .font(NFont.mono(10))
+                    .foregroundStyle(NSColorToken.textGhost)
+            }
+            VStack(spacing: NSpace.xs) {
+                ForEach(speakers, id: \.self) { speaker in
+                    HStack(spacing: NSpace.sm) {
+                        Text("\(speaker):")
+                            .font(NFont.mono(11))
+                            .foregroundStyle(NSColorToken.textTertiary)
+                            .frame(width: 80, alignment: .leading)
+                        TextField("Enter name…", text: Binding(
+                            get:  { names[speaker] ?? "" },
+                            set:  { names[speaker] = $0 }
+                        ))
+                        .font(NFont.mono(11))
+                        .foregroundStyle(NSColorToken.textPrimary)
+                        .textFieldStyle(.plain)
+                        .onSubmit { commitRename(speaker) }
+                        .padding(.horizontal, NSpace.sm)
+                        .padding(.vertical, NSpace.xs)
+                        .background(NSColorToken.inkRaised)
+                        .overlay(
+                            Rectangle()
+                                .stroke(NSColorToken.textGhost.opacity(0.15), lineWidth: 0.5)
+                        )
+                        // Confirm button
+                        let name = names[speaker] ?? ""
+                        if !name.trimmingCharacters(in: .whitespaces).isEmpty {
+                            Button("// apply") { commitRename(speaker) }
+                                .font(NFont.mono(10))
+                                .foregroundStyle(NSColorToken.Phos.amber)
+                                .buttonStyle(.plain)
+                                .transition(.opacity)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(NSpace.md)
+        .background(NSColorToken.inkPaper.opacity(0.7))
+        .overlay(
+            Rectangle()
+                .stroke(NSColorToken.Phos.amber.opacity(0.20), lineWidth: 0.5)
+        )
+        .animation(.nEaseOutQuint, value: names.keys.sorted())
+    }
+
+    private func commitRename(_ speaker: String) {
+        let name = (names[speaker] ?? "").trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        onRename(speaker, name)
+        names.removeValue(forKey: speaker)
+    }
+
+    /// Extract all "Speaker N" labels from transcript text.
+    static func unresolvedSpeakers(in text: String) -> [String] {
+        let pattern = #/(?m)^(Speaker \d+):\s/#
+        var seen = [String: Int]()
+        for match in text.matches(of: pattern) {
+            let label = String(match.1)
+            seen[label, default: 0] += 1
+        }
+        // Sort by speaker number so the list is ordered
+        return seen.keys.sorted {
+            let n1 = Int($0.split(separator: " ").last ?? "0") ?? 0
+            let n2 = Int($1.split(separator: " ").last ?? "0") ?? 0
+            return n1 < n2
+        }
     }
 }
 

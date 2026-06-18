@@ -1,5 +1,9 @@
 import SwiftUI
 import Combine
+#if os(macOS)
+import AppKit
+import UniformTypeIdentifiers
+#endif
 
 /// Top-right account affordance. Tap = sheet w/ email + sign-out.
 ///
@@ -10,6 +14,9 @@ import Combine
 ///   - Sign-out runs an explicit confirm (single irreversible action)
 struct ProfileChip: View {
     @Bindable var auth: AuthClient
+    /// Optional store used for whole-vault export. When nil, the export row is hidden.
+    /// Lead wires this from RootView/MacRootView where the live `AtomStore` exists.
+    var store: AtomStore? = nil
     @State private var showSheet = false
 
     var body: some View {
@@ -22,7 +29,7 @@ struct ProfileChip: View {
         .buttonStyle(ChipPressStyle())
         .accessibilityLabel("account · \(auth.session?.email ?? "signed in")")
         .sheet(isPresented: $showSheet) {
-            AccountSheet(auth: auth, onDismiss: { showSheet = false })
+            AccountSheet(auth: auth, store: store, onDismiss: { showSheet = false })
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(NSColorToken.inkPaper)
@@ -41,6 +48,9 @@ struct ProfileChip: View {
             initialGlyph
         }
         .frame(width: 28, height: 28)
+        // Extend hit area to 44pt without changing the visual footprint
+        .frame(width: 44, height: 44)
+        .contentShape(Circle())
     }
 
     private var initialGlyph: some View {
@@ -58,6 +68,7 @@ struct ProfileChip: View {
 
 private struct AccountSheet: View {
     @Bindable var auth: AuthClient
+    var store: AtomStore? = nil
     let onDismiss: () -> Void
 
     @State private var confirming = false
@@ -181,6 +192,11 @@ private struct AccountSheet: View {
                 .overlay(Rectangle().stroke(NSColorToken.textGhost.opacity(0.45), lineWidth: 0.5))
             }
             .buttonStyle(.plain)
+
+            // Export all notes — Markdown + JSON of the entire vault.
+            if let store {
+                exportAllRow(store: store)
+            }
 
             // Two-step destructive action — Emil's "irreversible action confirms".
             if confirming {
@@ -313,6 +329,91 @@ private struct AccountSheet: View {
         }
     }
 
+    // MARK: – Export all notes
+
+    @ViewBuilder
+    private func exportAllRow(store: AtomStore) -> some View {
+        let atoms = store.ordered
+        #if os(iOS) || os(visionOS)
+        // iOS: ShareLink of generated Markdown + JSON temp files.
+        let stem = AtomExport.vaultFileStem()
+        let mdURL = AtomExport.temporaryFile(name: "\(stem).md", contents: AtomExport.markdown(atoms))
+        let jsonURL = AtomExport.temporaryFile(name: "\(stem).json", contents: AtomExport.json(atoms))
+        let urls = [mdURL, jsonURL].compactMap { $0 }
+        ShareLink(items: urls,
+                  subject: Text("NOUS export"),
+                  preview: { url in SharePreview(url.lastPathComponent, image: Image(systemName: "doc.text")) }) {
+            exportRowLabel(count: atoms.count)
+        }
+        .buttonStyle(.plain)
+        .disabled(atoms.isEmpty)
+        .accessibilityLabel("Export all notes")
+        .accessibilityHint("Shares your whole vault as Markdown and JSON")
+        #else
+        // macOS: NSSavePanel — Markdown default, JSON optional.
+        Menu {
+            Button("Markdown (.md)") { exportAll(atoms, asJSON: false) }
+            Button("JSON (.json)")   { exportAll(atoms, asJSON: true) }
+        } label: {
+            exportRowLabel(count: atoms.count)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .disabled(atoms.isEmpty)
+        .accessibilityLabel("Export all notes")
+        #endif
+    }
+
+    private func exportRowLabel(count: Int) -> some View {
+        HStack {
+            Text("export all notes")
+                .font(NFont.body(15))
+                .foregroundStyle(NSColorToken.textPrimary)
+            Spacer()
+            Text("\(count)")
+                .font(NFont.mono(11))
+                .foregroundStyle(NSColorToken.textGhost)
+            Text("↓")
+                .font(NFont.mono(13))
+                .foregroundStyle(NSColorToken.Phos.cyan)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .padding(.horizontal, NSpace.md)
+        .background(NSColorToken.inkRaised)
+        .overlay(Rectangle().stroke(NSColorToken.textGhost.opacity(0.45), lineWidth: 0.5))
+    }
+
+    #if os(macOS)
+    private func exportAll(_ atoms: [AtomSnapshot], asJSON: Bool) {
+        let stem = AtomExport.vaultFileStem()
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        if asJSON {
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = "\(stem).json"
+        } else {
+            panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+            panel.nameFieldStringValue = "\(stem).md"
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let data = asJSON ? AtomExport.json(atoms) : Data(AtomExport.markdown(atoms).utf8)
+        do {
+            try data.write(to: url, options: .atomic)
+            NousLogger.info("export", "vault exported", [
+                "count": atoms.count,
+                "format": asJSON ? "json" : "markdown"
+            ])
+        } catch {
+            NousLogger.error("export", "vault export failed", [
+                "error": error.localizedDescription
+            ])
+        }
+    }
+    #endif
+
     private func cancel() {
         Haptics.shared.softTick()
         withAnimation(.easeOut(duration: 0.18)) { confirming = false }
@@ -332,7 +433,7 @@ private struct AccountSheet: View {
     }
 }
 
-private struct SyncDiagnosticPanel: View {
+struct SyncDiagnosticPanel: View {
     @State private var lastAt: Date?
     @State private var lastCount: Int = 0
     @State private var lastError: String?

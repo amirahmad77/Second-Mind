@@ -168,7 +168,7 @@ struct RootView: View {
                 VStack {
                     HStack {
                         Spacer()
-                        ProfileChip(auth: AuthClient.shared)
+                        ProfileChip(auth: AuthClient.shared, store: store)
                             .padding(.trailing, NSpace.xl)
                             .padding(.top, NSpace.lg)
                     }
@@ -433,7 +433,7 @@ struct RootView: View {
         // (which live in RemoteConfig, not the compile-time fallback) never loaded.
         Task { await RemoteConfig.shared.fetch() }
         let sync = SyncDaemon(context: ctx, supabase: supabase, gemini: gemini)
-        let store = AtomStore(context: ctx, sync: sync, gemini: gemini)
+        let store = AtomStore(context: ctx, sync: sync, gemini: gemini, backend: backend)
         store.bootstrap()
         sync.onRemoteEvent = { [weak store] e in store?.applyRemoteEvent(e) }
         sync.bootstrap()

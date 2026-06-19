@@ -1,5 +1,8 @@
 import SwiftUI
 import Combine
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// "Pair browser" sheet — iOS side of the Chrome extension handshake.
 /// Calls `POST /v1/pair/start` with the current user's id, then shows the
@@ -17,6 +20,7 @@ struct PairBrowserSheet: View {
     @State private var error: String?
     @State private var isLoading = false
     @State private var now = Date()
+    @State private var bridgeCopied = false
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -25,6 +29,9 @@ struct PairBrowserSheet: View {
             header
             codeBlock
             instructions
+            #if os(macOS)
+            bridgeTokenSection
+            #endif
             Spacer()
             actions
         }
@@ -109,6 +116,46 @@ struct PairBrowserSheet: View {
             .disabled(isLoading)
         }
     }
+
+    #if os(macOS)
+    /// Local-bridge shared secret. Separate from the account pairing code above:
+    /// this authenticates the localhost:9988 WebSocket so other local processes
+    /// or web pages can't drive the Meet bridge. Paste once into the extension's
+    /// "Bridge token" field. (Currently optional — soft mode — but pairing now
+    /// future-proofs against enforcement being enabled.)
+    private var bridgeTokenSection: some View {
+        VStack(alignment: .leading, spacing: NSpace.sm) {
+            Text("BRIDGE · TOKEN")
+                .font(NFont.mono(10))
+                .tracking(2)
+                .foregroundStyle(NSColorToken.textGhost)
+            Text("Paste into the NOUS extension's Bridge token field to secure the localhost connection.")
+                .font(NFont.body(13))
+                .foregroundStyle(NSColorToken.textGhostDim)
+            HStack(spacing: NSpace.sm) {
+                Text(MeetBridgeServer.persistedPairingToken)
+                    .font(NFont.mono(11))
+                    .foregroundStyle(NSColorToken.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Spacer()
+                Button(bridgeCopied ? "copied" : "copy") {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(MeetBridgeServer.persistedPairingToken, forType: .string)
+                    bridgeCopied = true
+                }
+                .buttonStyle(.plain)
+                .font(NFont.mono(11))
+                .tracking(1.5)
+                .foregroundStyle(NSColorToken.Phos.cyan)
+            }
+            .padding(NSpace.sm)
+            .background(NSColorToken.inkVoid, in: RoundedRectangle(cornerRadius: 6))
+        }
+    }
+    #endif
 
     // MARK: helpers
 

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- macOS App Sandbox -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Outgoing network connections (URLSession → Supabase, Gemini, backend) -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- File access: read/write user-selected files -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<!-- Microphone for voice capture -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- Speech recognition -->
+	<key>com.apple.security.speech-recognition</key>
+	<true/>
+	<!-- Calendar access — reads current/upcoming events to auto-fill meeting attendees -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<!-- Incoming localhost connections — Chrome extension WebSocket bridge on :9988 -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- Screen & System Audio Recording — ScreenCaptureKit system audio for meeting transcription -->
+	<key>com.apple.security.screen-capture</key>
+	<true/>
+	<!-- App Group — shared SwiftData store for the widget extension + App Intents -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.nous-core.NOUS-0</string>
+	</array>
+</dict>
+</plist>

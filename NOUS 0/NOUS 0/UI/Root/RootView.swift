@@ -483,6 +483,15 @@ struct RootView: View {
         let pvm = PushbackVM(backend: backend, userID: AppEnv.currentUserIDSync)
         pvm.refresh()
         self.pushbackVM = pvm
+
+        // Consume a pending "Capture to NOUS" App Intent (iOS surfacing path).
+        // The intent stashed the text; NOUS_0App.drain() moved it here. Capture
+        // it directly — a capture shortcut should save, not just open a sheet.
+        if let pending = NousIntentInbox.lastPendingCapture?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pending.isEmpty {
+            _ = store.capture(raw: pending, type: .thought)
+            NousIntentInbox.lastPendingCapture = nil
+        }
     }
 
     // MARK: Meet session poll

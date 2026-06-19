@@ -81,6 +81,79 @@ final class AtomStore {
         // Rewrite any pre-auth events to the signed-in user_id so they sync to
         // other devices. No-op if user not yet signed in or migration already ran.
         migrateLocalUserToSignedIn()
+        // MIGRATION 2 — re-embed under the new asymmetric taskType when the embedding
+        // schema version bumped. Queues work in the background; does not block launch.
+        reindexEmbeddingsIfSchemaChanged()
+        // MIGRATION 3 — repopulate the in-memory entity index for already-refined
+        // atoms (the index is transient and empty until atoms re-refine). Bounded
+        // background pass; no-ops when Gemini is unconfigured.
+        rebuildEntityIndexIfNeeded()
+    }
+
+    // MARK: - Migration 2: re-embed for asymmetric taskType
+
+    /// Current embedding schema version. Bump when the embedding semantics change in a
+    /// way that makes old cached vectors incompatible with new queries.
+    /// v2: switched to asymmetric RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY taskType.
+    private static let embedSchemaVersion = 2
+    private static let embedSchemaVersionKey = "nous.embed.schemaVersion"
+
+    /// MIGRATION 2 — if the stored embedding schema version is below current, wipe all
+    /// cached embeddings and re-queue every non-deleted atom for re-embedding via the
+    /// existing `SyncDaemon` serialized embed pipeline (lazy, one-at-a-time, with the
+    /// new taskType). Sets the version so it runs once. Never blocks launch — the
+    /// re-embed work is queued, not awaited.
+    private func reindexEmbeddingsIfSchemaChanged() {
+        let stored = UserDefaults.standard.integer(forKey: Self.embedSchemaVersionKey)
+        // A genuinely fresh install reads 0; treat that as "already current" so we
+        // don't pointlessly re-queue atoms that were never embedded under the old
+        // scheme. Only existing installs that previously stored a lower version
+        // (or 1, the implicit pre-key value) trigger the re-index.
+        guard stored < Self.embedSchemaVersion else { return }
+        // First-run sentinel: if there are no atoms at all, just stamp the version.
+        let liveAtomIDs = atoms.values.filter { !$0.isDeleted }.map(\.id)
+        guard !liveAtomIDs.isEmpty else {
+            UserDefaults.standard.set(Self.embedSchemaVersion, forKey: Self.embedSchemaVersionKey)
+            return
+        }
+        sync.reindexEmbeddings(atomIDs: liveAtomIDs)
+        UserDefaults.standard.set(Self.embedSchemaVersion, forKey: Self.embedSchemaVersionKey)
+        NousLogger.info("embed", "embedding schema reindex triggered",
+                        ["from": "\(stored)", "to": "\(Self.embedSchemaVersion)",
+                         "atoms": "\(liveAtomIDs.count)"])
+    }
+
+    // MARK: - Migration 3: rebuild entity index on launch
+
+    /// Cap on entity extractions kicked off per launch. The entity index rebuild is a
+    /// best-effort backfill, not a hard requirement, so bound the Gemini cost.
+    private static let entityRebuildCap = 30
+
+    /// MIGRATION 3 — the entity index is in-memory and starts empty each launch, so
+    /// atoms that already have `refinedContent` show no entities until they re-refine.
+    /// This kicks a bounded background pass that re-extracts entities for the most
+    /// recent refined atoms that aren't yet in the index. Reuses `extractEntities`
+    /// (same gated, fire-and-forget path), which no-ops when Gemini is unconfigured.
+    /// Loop-safe: only ever processes atoms missing an `entitiesByAtom` entry, capped
+    /// per launch, and generated task atoms never reach this (they have no refined text).
+    private func rebuildEntityIndexIfNeeded() {
+        let candidates = ordered
+            .filter { atom in
+                !atom.isDeleted
+                    && (atom.refinedContent?.isEmpty == false)
+                    && entitiesByAtom[atom.id] == nil
+            }
+            .prefix(Self.entityRebuildCap)
+
+        guard !candidates.isEmpty else { return }
+        var kicked = 0
+        for atom in candidates {
+            guard let refined = atom.refinedContent else { continue }
+            extractEntities(for: atom.id, refined: refined)   // gated + fire-and-forget
+            kicked += 1
+        }
+        NousLogger.info("store", "entity index rebuild queued",
+                        ["queued": "\(kicked)", "cap": "\(Self.entityRebuildCap)"])
     }
 
     /// Rewrites `NoteEventRecord` rows stamped with the per-install `localUserID`

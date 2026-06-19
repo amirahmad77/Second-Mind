@@ -116,6 +116,34 @@ final class SyncDaemon {
         }
     }
 
+    /// MIGRATION 2 — re-embed for the asymmetric taskType change. Old vectors were
+    /// embedded as SEMANTIC_SIMILARITY; new ones as RETRIEVAL_DOCUMENT, so the mixed
+    /// space hurts retrieval. This wipes the local embedding caches
+    /// (`EmbeddingRecord` + `MeetingChunkRecord`) and re-queues `atomIDs` through the
+    /// existing serialized embed pipeline so they re-embed lazily with the new
+    /// taskType. Does NOT await — embedding happens in the background `embedTask`.
+    ///
+    /// Cost is bounded by the serialized pipeline (one Gemini request at a time) and
+    /// by the caller passing only non-deleted atoms. Defensive: deletion failures are
+    /// logged and swallowed so a re-index can never block launch.
+    func reindexEmbeddings(atomIDs: [UUID]) {
+        let embeds = (try? context.fetch(FetchDescriptor<EmbeddingRecord>())) ?? []
+        for row in embeds { context.delete(row) }
+        let chunks = (try? context.fetch(FetchDescriptor<MeetingChunkRecord>())) ?? []
+        for row in chunks { context.delete(row) }
+        do {
+            try context.save()
+        } catch {
+            NousLogger.warning("embed", "reindex cache wipe save failed; continuing",
+                               ["error": error.localizedDescription])
+        }
+        for id in atomIDs { scheduleEmbed(id) }
+        NousLogger.info("embed", "embedding reindex queued",
+                        ["queued": "\(atomIDs.count)",
+                         "wipedEmbeddings": "\(embeds.count)",
+                         "wipedChunks": "\(chunks.count)"])
+    }
+
     /// Coalesces rapid edits to the same atom and serializes the embed pipeline
     /// — N captures don't spawn N parallel Gemini requests.
     private func scheduleEmbed(_ id: UUID) {

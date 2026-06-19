@@ -9,12 +9,24 @@ import SwiftData
 enum NousStore {
     static let appGroupID = "group.com.nous-core.NOUS-0"
 
+    /// One-time migration guard. When the store moved from the default per-app
+    /// location into the App Group container, existing on-device events lived in
+    /// the OLD store and would appear "lost" until a remote pull re-synced them.
+    /// This flag gates a one-shot import of the legacy store's rows into the new
+    /// App-Group container so nothing is lost on the move.
+    private static let legacyImportFlagKey = "nous.migrated.appGroupStore.v1"
+
     static let shared: ModelContainer = {
         let schema = Schema([NoteEventRecord.self, EmbeddingRecord.self, MeetingChunkRecord.self])
         do {
             let config = ModelConfiguration(schema: schema,
                                             groupContainer: .identifier(appGroupID))
-            return try ModelContainer(for: schema, configurations: config)
+            let container = try ModelContainer(for: schema, configurations: config)
+            // MIGRATION 1 — import legacy default-location store into the App Group
+            // container. Defensive: never throws out of the initializer, never blocks
+            // launch beyond a single synchronous fetch/insert pass guarded by a flag.
+            migrateLegacyStoreIfNeeded(into: container, schema: schema)
+            return container
         } catch {
             NousLogger.error("store", "app-group container unavailable; using default",
                              ["error": error.localizedDescription])
@@ -22,6 +34,85 @@ enum NousStore {
             return try! ModelContainer(for: schema)
         }
     }()
+
+    /// MIGRATION 1 — copies all `NoteEventRecord` + `EmbeddingRecord` rows from the
+    /// legacy default-location SwiftData store into the App-Group `target` container,
+    /// exactly once. Runs only when the App-Group store is empty (zero
+    /// `NoteEventRecord`s) — i.e. a fresh App-Group store that may be shadowing an
+    /// existing legacy store from before the move.
+    ///
+    /// Fully defensive: any failure (legacy store unopenable, fetch/insert error) is
+    /// logged and swallowed, the flag is still set, and `shared` keeps returning the
+    /// App-Group container regardless. Never crashes launch.
+    private static func migrateLegacyStoreIfNeeded(into target: ModelContainer, schema: Schema) {
+        let defaults = UserDefaults(suiteName: appGroupID) ?? .standard
+        guard !defaults.bool(forKey: legacyImportFlagKey) else { return }
+
+        do {
+            let targetContext = ModelContext(target)
+            // Only import into an empty App-Group store. If it already has events,
+            // the move already happened (or this is a genuinely new install) — skip.
+            let existing = try targetContext.fetchCount(FetchDescriptor<NoteEventRecord>())
+            guard existing == 0 else {
+                defaults.set(true, forKey: legacyImportFlagKey)
+                NousLogger.info("store", "legacy import skipped — app-group store not empty",
+                                ["existing": "\(existing)"])
+                return
+            }
+
+            // Open the legacy store at the DEFAULT location (no groupContainer). This
+            // is a second live container over a different SQLite file — safe because it
+            // is a distinct configuration with no overlapping URL.
+            let legacyConfig = ModelConfiguration(schema: schema)
+            let legacyContainer = try ModelContainer(for: schema, configurations: legacyConfig)
+            let legacyContext = ModelContext(legacyContainer)
+
+            let legacyEvents = (try? legacyContext.fetch(
+                FetchDescriptor<NoteEventRecord>())) ?? []
+            let legacyEmbeds = (try? legacyContext.fetch(
+                FetchDescriptor<EmbeddingRecord>())) ?? []
+
+            // Nothing in the legacy store — likely a clean first install, not a move.
+            if legacyEvents.isEmpty && legacyEmbeds.isEmpty {
+                defaults.set(true, forKey: legacyImportFlagKey)
+                NousLogger.info("store", "legacy import skipped — legacy store empty")
+                return
+            }
+
+            // Dedupe defensively even though the target is empty (belt-and-braces).
+            var seenEventIDs = Set<UUID>()
+            var importedEvents = 0
+            for row in legacyEvents where seenEventIDs.insert(row.id).inserted {
+                let copy = NoteEventRecord(
+                    id: row.id, atomID: row.atomID, kindRaw: row.kindRaw,
+                    payloadJSON: row.payloadJSON, createdAt: row.createdAt,
+                    userID: row.userID, synced: row.synced)
+                targetContext.insert(copy)
+                importedEvents += 1
+            }
+
+            var seenEmbedIDs = Set<UUID>()
+            var importedEmbeds = 0
+            for row in legacyEmbeds where seenEmbedIDs.insert(row.atomID).inserted {
+                let copy = EmbeddingRecord(
+                    atomID: row.atomID, dim: row.dim,
+                    vector: row.vector, updatedAt: row.updatedAt)
+                targetContext.insert(copy)
+                importedEmbeds += 1
+            }
+
+            try targetContext.save()
+            defaults.set(true, forKey: legacyImportFlagKey)
+            NousLogger.info("store", "legacy store imported into app-group container",
+                            ["events": "\(importedEvents)", "embeddings": "\(importedEmbeds)"])
+        } catch {
+            // Legacy store couldn't be opened / migration failed: set the flag so we
+            // never retry on every launch, and continue with the App-Group container.
+            defaults.set(true, forKey: legacyImportFlagKey)
+            NousLogger.warning("store", "legacy store import failed; continuing",
+                               ["error": error.localizedDescription])
+        }
+    }
 }
 
 /// SwiftData ledger row. Append-only, payload encoded as JSON for schema stability.

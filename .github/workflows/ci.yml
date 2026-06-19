@@ -1,0 +1,41 @@
+name: CI
+
+# Build + unit tests on every push to main and every PR.
+#
+# IMPORTANT — runner: this project targets the iOS 26.4 / macOS 26.3 SDK
+# (Xcode 26.4.1), which GitHub-hosted macOS runners do NOT have yet. So this
+# workflow uses a SELF-HOSTED macOS runner with that Xcode installed. Register
+# one: repo → Settings → Actions → Runners → New self-hosted runner (macOS).
+# When GitHub ships a `macos-26` image with Xcode 26, swap `runs-on` to it and
+# drop the self-hosted requirement.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Build & test (iOS Simulator, unsigned)
+        working-directory: "NOUS 0"
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme "NOUS 0" \
+            -project "NOUS 0.xcodeproj" \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -200

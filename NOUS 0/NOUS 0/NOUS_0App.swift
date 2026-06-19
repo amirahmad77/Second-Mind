@@ -131,7 +131,7 @@ struct NOUS_0App: App {
                 }
             }
         }
-        .modelContainer(for: [NoteEventRecord.self, EmbeddingRecord.self])
+        .modelContainer(NousStore.shared)
         .defaultSize(width: 1100, height: 720)
         .commands {
             macCommands
@@ -200,7 +200,7 @@ struct NOUS_0App: App {
                 }
             }
         }
-        .modelContainer(for: [NoteEventRecord.self, EmbeddingRecord.self])
+        .modelContainer(NousStore.shared)
     }
     #endif
 }

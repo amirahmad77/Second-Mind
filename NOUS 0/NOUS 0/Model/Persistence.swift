@@ -1,6 +1,29 @@
 import Foundation
 import SwiftData
 
+/// Shared persistence location. The app, the widget extension, and App Intents
+/// all open ONE SwiftData store in the App Group container so they see the same
+/// atoms. Falls back to the default per-app container if the group container is
+/// unavailable (e.g. the App Group entitlement isn't provisioned in a build),
+/// so the app never fails to launch.
+enum NousStore {
+    static let appGroupID = "group.com.nous-core.NOUS-0"
+
+    static let shared: ModelContainer = {
+        let schema = Schema([NoteEventRecord.self, EmbeddingRecord.self])
+        do {
+            let config = ModelConfiguration(schema: schema,
+                                            groupContainer: .identifier(appGroupID))
+            return try ModelContainer(for: schema, configurations: config)
+        } catch {
+            NousLogger.error("store", "app-group container unavailable; using default",
+                             ["error": error.localizedDescription])
+            // Last resort — a per-app container so the app still runs.
+            return try! ModelContainer(for: schema)
+        }
+    }()
+}
+
 /// SwiftData ledger row. Append-only, payload encoded as JSON for schema stability.
 @Model
 final class NoteEventRecord {

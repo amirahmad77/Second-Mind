@@ -464,6 +464,23 @@ final class AtomStore {
             .sorted { $0.createdAt > $1.createdAt }
         version &+= 1
         groupCache = nil
+        publishWidgetSnapshot()
+    }
+
+    /// Push a lightweight snapshot (recent atoms + open-task count) to the App
+    /// Group so the home-screen widget can render. Cheap; WidgetKit throttles
+    /// actual reloads.
+    private func publishWidgetSnapshot() {
+        let recent = ordered.prefix(5).map { atom in
+            WidgetBridge.Snapshot.Item(
+                id: atom.id.uuidString,
+                line: atom.oneLiner,
+                type: atom.type.rawValue,
+                due: atom.type == .task ? atom.dueAt : nil
+            )
+        }
+        let openTasks = ordered.filter { $0.type == .task && !($0.taskDone ?? false) }.count
+        WidgetBridge.publish(recent: Array(recent), openTaskCount: openTasks)
     }
 
     // MARK: - Refine

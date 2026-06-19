@@ -17,12 +17,14 @@ struct StreamView: View {
         let anyFilter = textActive || tagActive
 
         List {
-            // Top spacer so `// daily` label clears the floating profile chip.
-            Color.clear
-                .frame(height: NSpace.xl)
+            // Brand wordmark — subtle anchor at the very top of the stream. Also
+            // provides the clearance the `// daily` label needs from the floating
+            // profile chip, so it doubles as the former top spacer.
+            wordmarkHeader
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
-                .listRowInsets(.init())
+                .listRowInsets(.init(top: NSpace.xl, leading: NSpace.xl,
+                                     bottom: NSpace.xs, trailing: NSpace.xl))
 
             if anyFilter {
                 filterChip(text: textActive ? filter : nil, tag: tagActive ? tagFilter : nil)
@@ -171,6 +173,16 @@ private struct EmptyStateView: View {
 // MARK: - Filter chip
 
 extension StreamView {
+    /// Serif brand wordmark at the head of the stream. Kept small and ghost-toned
+    /// so it never competes with capture or the day groups below it.
+    fileprivate var wordmarkHeader: some View {
+        Text("nous")
+            .font(NFont.wordmark(26))
+            .foregroundStyle(NSColorToken.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
+    }
+
     @ViewBuilder fileprivate func filterChip(text: String?, tag: String?) -> some View {
         HStack(spacing: NSpace.sm) {
             Text("// filter:")

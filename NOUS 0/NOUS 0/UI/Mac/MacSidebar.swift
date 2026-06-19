@@ -56,6 +56,9 @@ struct MacSidebar: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(NSColorToken.inkPaper)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            wordmarkHeader
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             profileFooter
         }
@@ -83,6 +86,30 @@ struct MacSidebar: View {
                 onClose: { showBriefing = false }
             )
         }
+    }
+
+    // MARK: – Wordmark header
+
+    /// Serif brand wordmark pinned at the top of the sidebar, with the mono
+    /// kicker that runs through the rest of the chrome. Restrained — it anchors
+    /// the column without competing with the nav.
+    private var wordmarkHeader: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("nous")
+                .font(NFont.wordmark(22))
+                .foregroundStyle(NSColorToken.textPrimary)
+            Text("// thinking environment")
+                .font(NFont.mono(9))
+                .foregroundStyle(NSColorToken.textGhost)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, NSpace.md)
+        .padding(.top, NSpace.md)
+        .padding(.bottom, NSpace.sm)
+        .background(NSColorToken.inkPaper)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Nous, thinking environment")
+        .accessibilityAddTraits(.isHeader)
     }
 
     // MARK: – Briefing row

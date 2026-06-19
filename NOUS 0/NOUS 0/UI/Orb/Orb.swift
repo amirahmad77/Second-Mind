@@ -17,12 +17,19 @@ import SwiftUI
 struct Orb: View {
     let mode: OrbMode
     var touchPoint: CGPoint = CGPoint(x: 0.5, y: 0.5)   // reserved (legacy callers)
+    /// Ambient status: ≥1 atom refining in the background. When true AND the orb
+    /// is idle, a faint phosphor breath signals "work is happening" without
+    /// pulling the orb out of its capture-input role.
+    var ambientRefining: Bool = false
 
     // Physics state.
     @State private var pressed = false
     @State private var dragOffset: CGSize = .zero
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Heartbeat only reads while idle — any active mode owns the orb's meaning.
+    private var heartbeatActive: Bool { ambientRefining && mode == .idle }
 
     var body: some View {
         physicsLayer
@@ -51,6 +58,7 @@ struct Orb: View {
                                  blendDuration: 0.20)
 
         return OrbBeacon(mode: mode)
+            .background(heartbeatGlow)
             .scaleEffect(x: squashX, y: squashY, anchor: .center)
             .scaleEffect(dip)
             .offset(dragOffset)
@@ -60,6 +68,28 @@ struct Orb: View {
                               axis: (x: 0, y: 1, z: 0), perspective: 0.6)
             .animation(pressAnim, value: pressed)
             .animation(dragAnim,  value: dragOffset)
+    }
+
+    // MARK: - Background-refine heartbeat
+
+    /// A soft cyan halo behind the pill, pulsing on `.nBreath` while atoms
+    /// refine in the background. Lives behind OrbBeacon so it reads as "the
+    /// object is alive / thinking" without altering the pill's own chrome.
+    /// Reduce-motion: a single static dim halo (no pulse). Off entirely when
+    /// not idle, so active modes (voice / writing / refining) stay unmodified.
+    @ViewBuilder
+    private var heartbeatGlow: some View {
+        let tint = NSColorToken.Phos.cyan
+        if heartbeatActive {
+            if reduceMotion {
+                Capsule()
+                    .fill(tint.opacity(0.10))
+                    .blur(radius: 12)
+                    .allowsHitTesting(false)
+            } else {
+                HeartbeatHalo(tint: tint)
+            }
+        }
     }
 
     // MARK: - Physics gesture
@@ -94,5 +124,27 @@ struct Orb: View {
                     dragOffset = .zero
                 }
             }
+    }
+}
+
+// MARK: - Heartbeat halo
+
+/// Faint phosphor halo that breathes on `.nBreath` (4.2s) while background
+/// refine work is in flight. Core Animation owns the loop via
+/// `.repeatForever` — no timer, no task, near-zero main-thread cost (mirrors
+/// OrbBeacon's `BreathDot`). Opacity + scale both ease so the glow feels like
+/// a slow inhale rather than a blink.
+private struct HeartbeatHalo: View {
+    let tint: Color
+    @State private var inhale = false
+
+    var body: some View {
+        Capsule()
+            .fill(tint.opacity(inhale ? 0.22 : 0.06))
+            .blur(radius: 14)
+            .scaleEffect(inhale ? 1.06 : 0.98)
+            .allowsHitTesting(false)
+            .animation(.nBreath.repeatForever(autoreverses: true), value: inhale)
+            .onAppear { inhale = true }
     }
 }

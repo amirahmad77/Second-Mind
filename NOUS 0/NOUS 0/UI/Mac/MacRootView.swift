@@ -281,13 +281,9 @@ struct MacRootView: View {
                 onDelete: { atom in undoManager.scheduleDelete(atom: atom, store: store) }
             )
         case .synthesis:
-            // Synthesis lives in detail — show placeholder here
-            ContentUnavailableView(
-                "// synthesize",
-                systemImage: "sparkles",
-                description: Text("Ask a question in the detail panel →")
-            )
-            .foregroundStyle(NSColorToken.textGhost)
+            // Synthesis owns the detail column — the list column becomes a
+            // quiet companion that points the eye rightward to the instrument.
+            MacSynthesisSidePanel()
         }
     }
 
@@ -296,7 +292,13 @@ struct MacRootView: View {
     @ViewBuilder
     private func detailColumn(store: AtomStore) -> some View {
         if sidebarSelection == .synthesis {
-            MacSynthesisView(store: store, backend: backend, gemini: gemini)
+            MacSynthesisView(store: store, backend: backend, gemini: gemini) { atomID in
+                // Open a source atom in the stream detail pane. Synthesis hides
+                // the detail atom view, so return to the stream first, then
+                // select — mirrors MacSearchView and paletteActions.openAtom.
+                sidebarSelection = .stream
+                withAnimation(.nDrawer) { selectedAtomID = atomID }
+            }
         } else if let id = selectedAtomID, let atom = store.atoms[id] {
             MacAtomDetail(
                 atom: atom,
@@ -573,6 +575,70 @@ private extension View {
             onStop:        onStop,
             onCancel:      onCancel
         ))
+    }
+}
+
+// MARK: – Synthesis list-column companion
+
+/// Shown in the list column while Synthesis owns the detail column. The
+/// instrument lives to the right, so this panel stays deliberately quiet and
+/// directs the eye there rather than competing with it.
+private struct MacSynthesisSidePanel: View {
+    @State private var glow = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NSpace.lg) {
+            HStack(spacing: NSpace.sm) {
+                Circle()
+                    .fill(NSColorToken.Phos.violet.opacity(0.70))
+                    .frame(width: 5, height: 5)
+                    .shadow(color: NSColorToken.Phos.violet.opacity(glow ? 0.6 : 0.15), radius: 5)
+                Text("// synthesize")
+                    .font(NFont.mono(12))
+                    .foregroundStyle(NSColorToken.Phos.violet.opacity(0.80))
+            }
+
+            Text("Ask across everything you've captured.")
+                .font(NFont.detailBody(15))
+                .foregroundStyle(NSColorToken.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: NSpace.sm) {
+                step("embeds your question")
+                step("searches the knowledge graph")
+                step("converges sources into one answer")
+            }
+
+            Spacer()
+
+            HStack(spacing: NSpace.sm) {
+                Text("ask in the panel")
+                    .font(NFont.mono(11))
+                    .foregroundStyle(NSColorToken.textGhost)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(NSColorToken.Phos.violet.opacity(glow ? 0.85 : 0.45))
+                    .offset(x: glow ? 3 : 0)
+            }
+        }
+        .padding(NSpace.xl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(NSColorToken.inkVoid)
+        .onAppear {
+            withAnimation(.nBreath.repeatForever(autoreverses: true)) { glow = true }
+        }
+    }
+
+    private func step(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: NSpace.sm) {
+            Circle()
+                .fill(NSColorToken.Phos.violet.opacity(0.4))
+                .frame(width: 4, height: 4)
+            Text(text)
+                .font(NFont.mono(11))
+                .foregroundStyle(NSColorToken.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

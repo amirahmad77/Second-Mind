@@ -11,11 +11,24 @@ nonisolated enum AppEnv {
         let v = string(for: "NOUS_GEMINI_API_KEY")
         return v.isEmpty ? Secrets.geminiAPIKey : v
     }()
-    static let geminiEmbedModel = "gemini-embedding-001"
-    // ⚠️ DO NOT downgrade this model. gemini-3.1-flash-lite-preview is the minimum
-    // for structured JSON output + tag extraction quality we ship. Older models
-    // (2.x flash, 1.5 flash) produce malformed schemas and regress tag recall.
-    static let geminiRefineModel = "gemini-3.1-flash-lite-preview"
+
+    static let deepgramAPIKey: String = {
+        let v = string(for: "NOUS_DEEPGRAM_API_KEY")
+        return v.isEmpty ? Secrets.deepgramAPIKey : v
+    }()
+    static let geminiEmbedModel  = "gemini-embedding-001"
+    // Floating alias (intentional, per product decision): always tracks the
+    // latest Flash. Refine is latency-sensitive and stays on Flash — do NOT
+    // route it to the heavier synthesis model.
+    static let geminiRefineModel = "gemini-flash-latest"
+    // Higher-reasoning tier for the synthesis / pushback path (see
+    // GeminiClient.synthesizeAnswer). Floating Pro alias, analogous to the Flash
+    // alias above.
+    // ⚠️ UNVERIFIED at runtime in this project — if "gemini-pro-latest" is not a
+    // valid model id for this API key/project, synthesis will fail with HTTP 404.
+    // Pin to an explicit version (e.g. "gemini-2.5-pro") once availability is
+    // confirmed. Easily reverted to `geminiRefineModel` if it breaks.
+    static let geminiSynthesisModel = "gemini-pro-latest"
     static let embedDim = 768
 
     /// Optional: cloud backend (synthesis + pushback). nil if not configured.
@@ -52,16 +65,26 @@ nonisolated enum AppEnv {
         AuthClient.shared.session?.userID ?? localUserID
     }
 
+    /// API keys (NOUS_*_KEY) must NEVER come from UserDefaults — stale values
+    /// silently override xcconfig and Secrets.swift on every rebuild.
+    /// Priority: process env → Info.plist build setting → compile-time fallback.
     static func string(for key: String) -> String {
         let candidates: [String?] = [
             ProcessInfo.processInfo.environment[key],
             Bundle.main.object(forInfoDictionaryKey: key) as? String,
-            UserDefaults.standard.string(forKey: key)
         ]
         for candidate in candidates {
             let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !trimmed.isEmpty { return trimmed }
         }
         return ""
+    }
+
+    /// Call once at app launch. Purges any API key values that were accidentally
+    /// persisted to UserDefaults in earlier builds (they would shadow xcconfig).
+    static func purgeStaleUserDefaultsKeys() {
+        let apiKeys = ["NOUS_GEMINI_API_KEY", "NOUS_DEEPGRAM_API_KEY",
+                       "NOUS_SUPABASE_ANON_KEY", "NOUS_BACKEND_URL"]
+        apiKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
     }
 }

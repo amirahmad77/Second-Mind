@@ -19,6 +19,10 @@ final class AtomStore {
     private let context: ModelContext
     private let sync: SyncDaemon
     private let gemini: GeminiClient
+    /// R1 — backend client for auto-link suggestions. Optional so existing call
+    /// sites that don't pass one still compile; suggestions simply no-op when nil
+    /// or when the backend URL is unset (mirrors PushbackVM's isConfiguredSync gate).
+    private let backend: NousBackendClient?
 
     /// In-session refine failure counts. After maxRefineFailures, clear the shimmer for this
     /// session only (not persisted). Bootstrap re-queues on next launch when API is healthy.
@@ -37,10 +41,14 @@ final class AtomStore {
     /// one. Bootstrap's recovery pass must NOT re-queue refine for these.
     private var revertedAtoms: Set<UUID> = []
 
-    init(context: ModelContext, sync: SyncDaemon, gemini: GeminiClient) {
+    init(context: ModelContext,
+         sync: SyncDaemon,
+         gemini: GeminiClient,
+         backend: NousBackendClient? = nil) {
         self.context = context
         self.sync = sync
         self.gemini = gemini
+        self.backend = backend
     }
 
     func bootstrap() {
@@ -152,6 +160,8 @@ final class AtomStore {
         let done = !(a.taskDone ?? false)
         let ev = NoteEvent(atomID: id, kind: .taskToggled, payload: .init(taskDone: done))
         apply(ev, persist: true)
+        // R3 — a completed task no longer needs its reminder.
+        if done { ReminderScheduler.cancel(atomID: id) }
     }
 
     func toggleChecklistItem(id: UUID, lineIndex: Int) {
@@ -206,17 +216,32 @@ final class AtomStore {
         let due = cal.startOfDay(for: cal.date(byAdding: .day, value: days, to: Date()) ?? Date())
         let ev = NoteEvent(atomID: id, kind: .dueSet, payload: .init(dueAt: due))
         apply(ev, persist: true)
+        scheduleReminder(for: id, dueAt: due)   // R3
     }
 
     func setDue(id: UUID, to date: Date?) {
         let ev = NoteEvent(atomID: id, kind: .dueSet, payload: .init(dueAt: date))
         apply(ev, persist: true)
+        scheduleReminder(for: id, dueAt: date)  // R3 — cancels when date == nil
+    }
+
+    /// R3 — schedule (or cancel) a local reminder for an atom's due date. Uses the
+    /// atom's one-liner as the notification body. Authorization is requested lazily
+    /// inside `ReminderScheduler.schedule` the first time a due date is set.
+    private func scheduleReminder(for id: UUID, dueAt: Date?) {
+        guard let dueAt else {
+            ReminderScheduler.cancel(atomID: id)
+            return
+        }
+        let body = atoms[id]?.oneLiner ?? ""
+        Task { await ReminderScheduler.schedule(atomID: id, title: body, dueAt: dueAt) }
     }
 
     func delete(id: UUID) {
         let ev = NoteEvent(atomID: id, kind: .deleted, payload: .init())
         apply(ev, persist: true)
         rebuildOrdered()
+        ReminderScheduler.cancel(atomID: id)   // R3
     }
 
     func addTag(id: UUID, tag: String) {
@@ -373,6 +398,10 @@ final class AtomStore {
                     let tagEv = NoteEvent(atomID: id, kind: .tagged, payload: .init(tags: result.tags))
                     apply(tagEv, persist: true)
                 }
+                // R1 — refine succeeded; fetch auto-link suggestions in the background.
+                // Uses the refined text (richer signal) so candidate matching is better.
+                // Never blocks or fails refine — failures log and leave suggestions empty.
+                self.fetchLinkSuggestions(for: id, text: result.refined)
             } catch {
                 NousLogger.error("store", "startRefine failed", ["id": id.uuidString, "error": error.localizedDescription])
                 let failures = (self.refineFailures[id] ?? 0) + 1
@@ -432,6 +461,60 @@ final class AtomStore {
     }
 
     private(set) var linkSuggestions: [UUID: [LinkSuggestion]] = [:]
+
+    /// R1 — fetch backend link suggestions for an atom and populate `linkSuggestions`.
+    /// Fire-and-forget; runs after a successful refine. Filters self-links, already
+    /// linked targets (confirmed inbound graph), and deleted atoms. No-ops when the
+    /// backend is unset (mirrors PushbackVM's `isConfiguredSync` gate).
+    private func fetchLinkSuggestions(for atomID: UUID, text: String) {
+        guard let backend, backend.isConfiguredSync else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let userID = await AppEnv.currentUserID()
+            do {
+                let resp = try await backend.suggestLinks(userID: userID,
+                                                          atomID: atomID,
+                                                          text: trimmed)
+                self.applyLinkSuggestions(resp, for: atomID)
+            } catch {
+                NousLogger.warning("store", "suggestLinks failed",
+                                   ["id": atomID.uuidString, "error": error.localizedDescription])
+            }
+        }
+    }
+
+    /// Maps a backend response → `[LinkSuggestion]` and stores it, filtering invalid
+    /// targets. Runs on the MainActor (AtomStore isolation) so reading `atoms` /
+    /// `inboundLinks` is safe.
+    private func applyLinkSuggestions(_ resp: NousBackendClient.SuggestLinksResponse,
+                                      for atomID: UUID) {
+        // Targets this atom already links to: inboundLinks[target] holds the set of
+        // SOURCE ids linking to `target`, so any key whose set contains `atomID` is a
+        // target `atomID` already points at. Exclude those (no duplicate suggestions).
+        let alreadyLinkedTargets = Set(
+            inboundLinks.filter { $0.value.contains(atomID) }.keys
+        )
+
+        let mapped: [LinkSuggestion] = resp.suggestions.compactMap { s in
+            let target = s.atom_id
+            guard target != atomID else { return nil }              // no self-links
+            guard atoms[target]?.isDeleted == false else { return nil } // skip deleted/missing
+            guard !alreadyLinkedTargets.contains(target) else { return nil } // skip existing
+            return LinkSuggestion(target: target, reason: s.reason)
+        }
+        // Dedupe by target, preserving backend ordering (highest score first).
+        var seen = Set<UUID>()
+        let deduped = mapped.filter { seen.insert($0.target).inserted }
+        guard !deduped.isEmpty else {
+            linkSuggestions[atomID] = []
+            return
+        }
+        linkSuggestions[atomID] = deduped
+        NousLogger.info("store", "link suggestions populated",
+                        ["id": atomID.uuidString, "count": "\(deduped.count)"])
+    }
 
     func confirmSuggestion(for atomID: UUID, target: UUID) {
         let ev = NoteEvent(atomID: atomID, kind: .linked, payload: .init(linkTargetID: target, linkKind: "also-see"))

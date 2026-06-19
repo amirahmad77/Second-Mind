@@ -379,8 +379,27 @@ actor GeminiClient {
 
     // MARK: Embed
 
+    /// Asymmetric retrieval task type for the Gemini embedding endpoint.
+    ///
+    /// Retrieval quality improves when stored documents and search queries are
+    /// embedded with *different* task types (Gemini projects them into a shared
+    /// space tuned for query→document matching):
+    ///   - `.document` (RETRIEVAL_DOCUMENT) → the indexing path (stored atoms).
+    ///   - `.query`    (RETRIEVAL_QUERY)    → the search / synthesis question.
+    /// `.similarity` (SEMANTIC_SIMILARITY) is symmetric — only for dedup /
+    /// clustering / "find similar atoms" style comparisons, NOT query→document.
+    enum EmbedTaskType: String, Sendable {
+        case document   = "RETRIEVAL_DOCUMENT"
+        case query      = "RETRIEVAL_QUERY"
+        case similarity = "SEMANTIC_SIMILARITY"
+    }
+
     /// Returns 768-dim vector (MRL truncated) or nil.
-    func embed(_ text: String) async throws -> [Float] {
+    ///
+    /// `taskType` defaults to `.document` so the existing indexing callers
+    /// (SyncDaemon embedding stored atoms) get RETRIEVAL_DOCUMENT automatically.
+    /// Query-side callers (synthesis / search) MUST pass `.query`.
+    func embed(_ text: String, taskType: EmbedTaskType = .document) async throws -> [Float] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else {
             throw NSError(domain: "Gemini.embed", code: -2)
@@ -399,7 +418,7 @@ actor GeminiClient {
 
         let body = Req(content: Content(parts: [Part(text: input)]),
                        outputDimensionality: AppEnv.embedDim,
-                       taskType: "SEMANTIC_SIMILARITY")
+                       taskType: taskType.rawValue)
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(AppEnv.geminiEmbedModel):embedContent")!
         var req = URLRequest(url: url, timeoutInterval: 15)
         req.httpMethod = "POST"
@@ -447,7 +466,9 @@ actor GeminiClient {
             "contents": [["role": "user", "parts": [["text": prompt]]]],
             "generationConfig": ["temperature": 0.5, "maxOutputTokens": 1024]
         ]
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(AppEnv.geminiRefineModel):generateContent")!
+        // Synthesis is the reasoning-heavy path (grounding + pushback) so it routes
+        // to the higher-reasoning Pro tier, NOT the flash refine model.
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(AppEnv.geminiSynthesisModel):generateContent")!
         var req = URLRequest(url: url, timeoutInterval: 30)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -458,7 +479,7 @@ actor GeminiClient {
         let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
         guard status == 200 else {
             let bodyStr = String(data: data, encoding: .utf8) ?? ""
-            NousLogger.error("gemini", "synthesize HTTP \(status)", ["body": String(bodyStr.prefix(300))])
+            NousLogger.error("gemini", "synthesize HTTP \(status)", ["model": AppEnv.geminiSynthesisModel, "body": String(bodyStr.prefix(300))])
             throw NSError(domain: "Gemini.synthesize", code: status,
                           userInfo: [NSLocalizedDescriptionKey: "Gemini error \(status)"])
         }

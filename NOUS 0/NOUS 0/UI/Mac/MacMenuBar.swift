@@ -170,7 +170,7 @@ struct MacMenuBarContent: View {
     private func bootstrapIfNeeded() {
         guard store == nil, auth.isAuthenticated else { return }
         let s = SyncDaemon(context: ctx, supabase: supabase, gemini: gemini)
-        let st = AtomStore(context: ctx, sync: s, gemini: gemini)
+        let st = AtomStore(context: ctx, sync: s, gemini: gemini, backend: NousBackendClient())
         st.bootstrap()
         s.onRemoteEvent = { [weak st] e in st?.applyRemoteEvent(e) }
         s.bootstrap()

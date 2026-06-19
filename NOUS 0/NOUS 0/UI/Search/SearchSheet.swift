@@ -170,7 +170,7 @@ struct SearchSheet: View {
         let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         do {
-            let vec = try await gemini.embed(trimmed)
+            let vec = try await gemini.embed(trimmed, taskType: .query)
             // Pass `queryText` so server activates PRD §4 keyword-override path
             // (decay neutralized when tsvector matches the query).
             let remoteHits = try await supabase.semanticSearch(

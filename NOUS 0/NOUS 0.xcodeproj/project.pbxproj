@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		D1A66F00000000000000000C /* NOUS Widgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D1A66F000000000000000002 /* NOUS Widgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		C1A55E0000000000000009 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -14,12 +18,34 @@
 			remoteGlobalIDString = B9592F752F963AD30034F4CD;
 			remoteInfo = "NOUS 0";
 		};
+		D1A66F000000000000000009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B9592F6E2F963AD30034F4CD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D1A66F000000000000000001;
+			remoteInfo = "NOUS Widgets";
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		D1A66F00000000000000000B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				D1A66F00000000000000000C /* NOUS Widgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		B9592F762F963AD30034F4CD /* NOUS 0.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "NOUS 0.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B9592F842F963AD40034F4CD /* NOUS 0/App/AppConfig.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "NOUS 0/App/AppConfig.xcconfig"; sourceTree = "<group>"; };
 		C1A55E0000000000000002 /* NOUS 0Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "NOUS 0Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1A66F000000000000000002 /* NOUS Widgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "NOUS Widgets.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +57,11 @@
 		C1A55E0000000000000003 /* NOUS 0Tests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "NOUS 0Tests";
+			sourceTree = "<group>";
+		};
+		D1A66F000000000000000003 /* NOUS Widgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "NOUS Widgets";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -50,6 +81,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D1A66F000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -58,6 +96,7 @@
 			children = (
 				B9592F782F963AD30034F4CD /* NOUS 0 */,
 				C1A55E0000000000000003 /* NOUS 0Tests */,
+				D1A66F000000000000000003 /* NOUS Widgets */,
 				B9592F772F963AD30034F4CD /* Products */,
 				B959314A2F9A512D0034F4CD /* Recovered References */,
 			);
@@ -68,6 +107,7 @@
 			children = (
 				B9592F762F963AD30034F4CD /* NOUS 0.app */,
 				C1A55E0000000000000002 /* NOUS 0Tests.xctest */,
+				D1A66F000000000000000002 /* NOUS Widgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -90,10 +130,12 @@
 				B9592F722F963AD30034F4CD /* Sources */,
 				B9592F732F963AD30034F4CD /* Frameworks */,
 				B9592F742F963AD30034F4CD /* Resources */,
+				D1A66F00000000000000000B /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D1A66F00000000000000000A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				B9592F782F963AD30034F4CD /* NOUS 0 */,
@@ -127,6 +169,27 @@
 			productReference = C1A55E0000000000000002 /* NOUS 0Tests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		D1A66F000000000000000001 /* NOUS Widgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D1A66F000000000000000006 /* Build configuration list for PBXNativeTarget "NOUS Widgets" */;
+			buildPhases = (
+				D1A66F000000000000000004 /* Sources */,
+				D1A66F000000000000000005 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				D1A66F000000000000000003 /* NOUS Widgets */,
+			);
+			name = "NOUS Widgets";
+			packageProductDependencies = (
+			);
+			productName = "NOUS Widgets";
+			productReference = D1A66F000000000000000002 /* NOUS Widgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -143,6 +206,9 @@
 					C1A55E0000000000000001 = {
 						CreatedOnToolsVersion = 26.4.1;
 						TestTargetID = B9592F752F963AD30034F4CD;
+					};
+					D1A66F000000000000000001 = {
+						CreatedOnToolsVersion = 26.4.1;
 					};
 				};
 			};
@@ -162,6 +228,7 @@
 			targets = (
 				B9592F752F963AD30034F4CD /* NOUS 0 */,
 				C1A55E0000000000000001 /* NOUS 0Tests */,
+				D1A66F000000000000000001 /* NOUS Widgets */,
 			);
 		};
 /* End PBXProject section */
@@ -191,6 +258,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D1A66F000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -198,6 +272,11 @@
 			isa = PBXTargetDependency;
 			target = B9592F752F963AD30034F4CD /* NOUS 0 */;
 			targetProxy = C1A55E0000000000000009 /* PBXContainerItemProxy */;
+		};
+		D1A66F00000000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D1A66F000000000000000001 /* NOUS Widgets */;
+			targetProxy = D1A66F000000000000000009 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -470,6 +549,60 @@
 			};
 			name = Release;
 		};
+		D1A66F000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "NOUS Widgets/NOUS_Widgets.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 95Z83CMC8G;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "NOUS Widgets/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nous-core.NOUS-0.widgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D1A66F000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "NOUS Widgets/NOUS_Widgets.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 95Z83CMC8G;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "NOUS Widgets/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nous-core.NOUS-0.widgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -496,6 +629,15 @@
 			buildConfigurations = (
 				C1A55E0000000000000007 /* Debug */,
 				C1A55E0000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D1A66F000000000000000006 /* Build configuration list for PBXNativeTarget "NOUS Widgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D1A66F000000000000000007 /* Debug */,
+				D1A66F000000000000000008 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

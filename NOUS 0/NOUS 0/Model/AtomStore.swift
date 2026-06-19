@@ -888,6 +888,23 @@ final class AtomStore {
 
     // Convenience
     var taskAtoms: [AtomSnapshot] { ordered.filter { $0.type == .task } }
+
+    /// Read-only edge list for the constellation graph. `inboundLinks` maps a
+    /// target → the set of source ids that link to it; this flattens it into
+    /// directed (source → target) pairs. Only edges where BOTH endpoints exist
+    /// and are not soft-deleted are returned, so the graph never draws a line to
+    /// a vanished node. Keeps `inboundLinks` private — the graph reads positions
+    /// off ids it already has from `ordered`.
+    var linkEdges: [(source: UUID, target: UUID)] {
+        inboundLinks.flatMap { target, sources -> [(source: UUID, target: UUID)] in
+            guard atoms[target]?.isDeleted == false else { return [] }
+            return sources.compactMap { source in
+                guard atoms[source]?.isDeleted == false else { return nil }
+                return (source: source, target: target)
+            }
+        }
+    }
+
     func inboundCount(of id: UUID) -> Int { inboundLinks[id]?.count ?? 0 }
     func inboundAtoms(for id: UUID) -> [AtomSnapshot] {
         guard let sources = inboundLinks[id] else { return [] }

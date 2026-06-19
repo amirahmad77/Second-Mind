@@ -28,6 +28,9 @@ struct MacSidebar: View {
     /// Local presentation of the daily briefing — kept self-contained inside the
     /// sidebar so we don't thread state through MacRootView.
     @State private var showBriefing = false
+    /// Local presentation of the constellation graph — same self-contained pattern
+    /// as the briefing; never routed through MacRootView.
+    @State private var showGraph = false
 
     var body: some View {
         List(selection: $selection) {
@@ -36,6 +39,7 @@ struct MacSidebar: View {
             // briefing sheet rather than swapping the detail pane.
             Section {
                 briefingRow
+                constellationRow
             }
 
             // ── Primary navigation ────────────────────────────────────────────
@@ -86,6 +90,26 @@ struct MacSidebar: View {
                 onClose: { showBriefing = false }
             )
         }
+        .sheet(isPresented: $showGraph) {
+            GraphView(
+                store: store,
+                onPickAtom: { atom in
+                    // Same decoupled path as the briefing: dismiss the sheet,
+                    // surface the stream pane, and broadcast the atom id for
+                    // MacRootView (its private selection state) to open.
+                    showGraph = false
+                    selection = .stream
+                    NotificationCenter.default.post(
+                        name: .nousSelectAtom,
+                        object: nil,
+                        userInfo: ["atomID": atom.id.uuidString]
+                    )
+                    NousLogger.info("store", "graph pick → select atom",
+                                    ["id": atom.id.uuidString])
+                },
+                onClose: { showGraph = false }
+            )
+        }
     }
 
     // MARK: – Wordmark header
@@ -125,6 +149,28 @@ struct MacSidebar: View {
             } icon: {
                 Image(systemName: "sun.max")
                     .foregroundStyle(NSColorToken.Phos.amber)
+                    .imageScale(.small)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+    }
+
+    // MARK: – Constellation row
+
+    private var constellationRow: some View {
+        Button {
+            showGraph = true
+        } label: {
+            Label {
+                Text("// constellation")
+                    .font(NFont.mono(12))
+                    .foregroundStyle(NSColorToken.textSecondary)
+            } icon: {
+                Image(systemName: "circle.hexagongrid")
+                    .foregroundStyle(NSColorToken.Phos.violet)
                     .imageScale(.small)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

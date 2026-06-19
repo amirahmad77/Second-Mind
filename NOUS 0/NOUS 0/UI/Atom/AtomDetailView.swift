@@ -48,6 +48,20 @@ struct AtomDetailView: View {
             }
         }
         .background(NSColorToken.inkVoid.ignoresSafeArea())
+        // `[[` link autocomplete while editing — mirrors the capture-sheet UX.
+        // `LinkPickerBar` self-detects the trailing open `[[<query>` in `editBuffer`,
+        // shows itself when a query is active, and on selection replaces that fragment
+        // with the canonical `[[<uuid>|<alias>]]` literal via `LinkParser.literal`.
+        .safeAreaInset(edge: .bottom) {
+            if editMode {
+                LinkPickerBar(
+                    text: $editBuffer,
+                    store: store,
+                    onPicked: { NousLogger.debug("store", "edit link inserted (iOS)") },
+                    onCancel: { }
+                )
+            }
+        }
         .preferredColorScheme(.dark)
         .transition(reduceMotion
             ? .opacity

@@ -65,6 +65,36 @@ nonisolated enum AppEnv {
         AuthClient.shared.session?.userID ?? localUserID
     }
 
+    // MARK: – User-facing settings (UserDefaults-backed)
+    //
+    // These DO live in UserDefaults — they're non-secret behaviour toggles the
+    // user controls from SettingsView. A sibling enforcement path reads the same
+    // keys, so the string literals below are a shared contract: do NOT rename.
+
+    /// Settings key constants. Mirrored by SettingsView's `@AppStorage` keys.
+    enum SettingsKey {
+        static let autoRefine    = "nous.settings.autoRefine"
+        static let syncPaused    = "nous.settings.syncPaused"
+        static let notifications = "nous.settings.notifications"
+    }
+
+    /// Whether captured atoms are automatically sent to Gemini for refinement.
+    /// Defaults to `true` when the key has never been written.
+    static var autoRefineEnabled: Bool {
+        let ud = UserDefaults.standard
+        return ud.object(forKey: SettingsKey.autoRefine) == nil
+            ? true
+            : ud.bool(forKey: SettingsKey.autoRefine)
+    }
+
+    /// Whether cloud sync is paused. Defaults to `false` (sync active) when unset.
+    static var syncPaused: Bool {
+        let ud = UserDefaults.standard
+        return ud.object(forKey: SettingsKey.syncPaused) == nil
+            ? false
+            : ud.bool(forKey: SettingsKey.syncPaused)
+    }
+
     /// API keys (NOUS_*_KEY) must NEVER come from UserDefaults — stale values
     /// silently override xcconfig and Secrets.swift on every rebuild.
     /// Priority: process env → Info.plist build setting → compile-time fallback.

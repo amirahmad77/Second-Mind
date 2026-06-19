@@ -195,6 +195,18 @@ struct MacAtomDetail: View {
                         .frame(minHeight: 200)
                         .focused($editorFocus)
                         .onSubmit { commitEdit() }
+
+                    // `[[` link autocomplete while editing — mirrors MacCapturePanel.
+                    // `LinkPickerBar` self-detects the trailing open `[[<query>` in
+                    // `editBuffer`, renders itself only when a query is active, and on
+                    // selection replaces that fragment with the canonical
+                    // `[[<uuid>|<alias>]]` literal via `LinkParser.literal`.
+                    LinkPickerBar(
+                        text: $editBuffer,
+                        store: store,
+                        onPicked: { editorFocus = true; NousLogger.debug("store", "edit link inserted (macOS)") },
+                        onCancel: { editorFocus = true }
+                    )
                 } else {
                     let content = showRaw ? atom.rawContent : atom.displayContent
                     MarkdownView(

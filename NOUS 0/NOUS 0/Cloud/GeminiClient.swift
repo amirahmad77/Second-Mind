@@ -264,6 +264,104 @@ actor GeminiClient {
         }
     }
 
+    // MARK: Action-item extraction (R9)
+
+    /// R9 — Extract concise, imperative action items from refined meeting content.
+    /// Structured-output call (responseSchema, mirrors `refine`). Each item is a
+    /// short imperative phrase (no checkbox prefix), deduped, capped at 8.
+    /// Returns [] when the key is unset so the caller no-ops cleanly.
+    func extractActionItems(from text: String) async throws -> [String] {
+        guard !resolvedKey.isEmpty else {
+            NousLogger.warning("gemini", "extractActionItems skipped — API key not configured")
+            return []
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        let systemPrompt = """
+        You read a refined meeting summary and extract its concrete action items.
+        Rules:
+        - Each item is a SHORT imperative phrase (start with a verb: "Send", "Review", "Schedule", "Draft").
+        - No checkbox prefix, no numbering, no trailing punctuation.
+        - Only genuine, actionable follow-ups. Skip decisions, observations, and open questions.
+        - Deduplicate. Merge near-identical items.
+        - Max 8 items. Return an empty array if there are no clear action items.
+        Output JSON: { "items": string[] }
+        """
+
+        let body: [String: Any] = [
+            "systemInstruction": [
+                "role": "system",
+                "parts": [["text": systemPrompt]]
+            ],
+            "contents": [
+                ["role": "user", "parts": [["text": trimmed]]]
+            ],
+            "generationConfig": [
+                "temperature": 0.1,
+                "responseMimeType": "application/json",
+                "responseSchema": [
+                    "type": "OBJECT",
+                    "properties": [
+                        "items": [
+                            "type": "ARRAY",
+                            "items": ["type": "STRING"],
+                            "maxItems": 8
+                        ]
+                    ],
+                    "required": ["items"]
+                ]
+            ]
+        ]
+
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(AppEnv.geminiRefineModel):generateContent")!
+        var req = URLRequest(url: url, timeoutInterval: 25)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(resolvedKey, forHTTPHeaderField: "x-goog-api-key")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, resp) = try await session.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            NousLogger.error("gemini", "extractActionItems HTTP \(status)",
+                             ["model": AppEnv.geminiRefineModel, "body": String(bodyStr.prefix(400))])
+            throw NSError(domain: "Gemini.extractActionItems", code: status,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(status): \(bodyStr.prefix(200))"])
+        }
+
+        struct Part: Decodable { let text: String? }
+        struct Content: Decodable { let parts: [Part]? }
+        struct Cand: Decodable { let content: Content? }
+        struct Resp: Decodable { let candidates: [Cand]? }
+        let envelope = try JSONDecoder().decode(Resp.self, from: data)
+        let payloadText = envelope.candidates?.first?.content?.parts?.compactMap(\.text).joined() ?? ""
+
+        struct Inner: Decodable { let items: [String]? }
+        guard let payloadData = payloadText.data(using: .utf8), !payloadText.isEmpty else {
+            NousLogger.error("gemini", "extractActionItems empty payload",
+                             ["candidates": envelope.candidates?.count ?? 0])
+            throw NSError(domain: "Gemini.extractActionItems", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "empty payload"])
+        }
+        let inner = try JSONDecoder().decode(Inner.self, from: payloadData)
+
+        // Trim, drop empties, dedupe case-insensitively, cap at 8.
+        var seen = Set<String>()
+        var out: [String] = []
+        for raw in (inner.items ?? []) {
+            let item = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !item.isEmpty else { continue }
+            let key = item.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            out.append(item)
+            if out.count >= 8 { break }
+        }
+        NousLogger.info("gemini", "extractActionItems ok", ["count": out.count])
+        return out
+    }
+
     // MARK: Meeting transcription (audio → diarized transcript)
 
     /// Sends mic + optional system-audio data to Gemini Flash 1.5 for transcription

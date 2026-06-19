@@ -123,6 +123,16 @@ final class AuthClient: NSObject {
             }
         }
 
+        // Validate the callback origin before trusting any token material in it.
+        // ASWebAuthenticationSession scopes callbacks to callbackScheme, but we also
+        // pin the expected host so a malformed/spoofed redirect can't smuggle tokens.
+        guard callback.scheme == callbackScheme,
+              callback.host == "auth-callback" else {
+            NousLogger.error("auth", "signIn callback unexpected origin",
+                             ["scheme": callback.scheme ?? "nil", "host": callback.host ?? "nil"])
+            throw AuthError.noTokensInCallback
+        }
+
         // Tokens come back in the URL fragment, not the query. Supabase format:
         //   nous://auth-callback#access_token=...&refresh_token=...&expires_in=3600&token_type=bearer
         guard let frag = callback.fragment, !frag.isEmpty else {
@@ -160,8 +170,9 @@ final class AuthClient: NSObject {
     func signOut() async {
         if let s = session {
             // Best-effort logout — invalidates the refresh token server-side.
-            var req = URLRequest(url: supabaseURL.appendingPathComponent("auth/v1/logout")
-                .appending(queryItems: [URLQueryItem(name: "apikey", value: anonKey)]))
+            // apikey is sent as a header only; never as a query param (leaks into
+            // server/proxy access logs).
+            var req = URLRequest(url: supabaseURL.appendingPathComponent("auth/v1/logout"))
             req.httpMethod = "POST"
             req.setValue(anonKey, forHTTPHeaderField: "apikey")
             req.setValue("Bearer \(s.accessToken)", forHTTPHeaderField: "Authorization")

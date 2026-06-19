@@ -57,13 +57,40 @@ final class AxiomShipper: @unchecked Sendable {
 
     func append(_ entry: [String: Any]) {
         guard !token.isEmpty else { return }
+        // Defense-in-depth: scrub PII/secrets BEFORE the entry ever enters the
+        // buffer, so nothing sensitive can be transmitted to the Axiom cloud even
+        // if an upstream caller forgets to redact (GDPR/CCPA). os.Logger path is
+        // unaffected — this only touches the Axiom-bound payload.
+        let scrubbed = Self.scrub(entry)
         queue.async { [weak self] in
             guard let self else { return }
-            self.buffer.append(entry)
+            self.buffer.append(scrubbed)
             if self.buffer.count >= self.autoFlushCount {
                 self.flushNow()
             }
         }
+    }
+
+    // MARK: - Scrubbing
+
+    /// Metadata keys whose VALUES must never reach the cloud logging service.
+    /// Matched case-insensitively. Keys are kept (structure preserved); only the
+    /// value is replaced with a redaction marker.
+    private static let sensitiveKeys: Set<String> = [
+        "text", "raw", "transcript", "body", "content", "speech",
+        "name", "names", "participant", "participants",
+        "prompt", "query", "email",
+        "token", "key", "apikey", "authorization", "password",
+    ]
+
+    /// Returns a copy of `entry` with any sensitive-keyed value redacted.
+    /// Never crashes on missing keys — iterates only what is present.
+    private static func scrub(_ entry: [String: Any]) -> [String: Any] {
+        var out = entry
+        for key in entry.keys where sensitiveKeys.contains(key.lowercased()) {
+            out[key] = "<redacted>"
+        }
+        return out
     }
 
     func flushSync() {

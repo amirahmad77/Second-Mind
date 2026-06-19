@@ -69,8 +69,7 @@ struct StreamView: View {
                                 Haptics.shared.softTick()
                             }
                         )
-                        .padding(.leading, NSpace.xs)
-                        .padding(.bottom, NSpace.md)
+                        .padding(.bottom, NSpace.xs)
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                         .listRowInsets(.init(top: 0, leading: NSpace.xl, bottom: 0, trailing: NSpace.xl))
@@ -80,6 +79,8 @@ struct StreamView: View {
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                            .accessibilityLabel("Delete atom")
+                            .accessibilityHint("Removes this atom. Can be undone within 4 seconds.")
                         }
                     }
                 }
@@ -114,10 +115,30 @@ private struct EmptyStateView: View {
     let tag: String?
     var body: some View {
         VStack(alignment: .leading, spacing: NSpace.md) {
+            // Ghost dot cluster — vocabulary anchor when vault is empty
+            if !textActive && !tagActive {
+                HStack(spacing: NSpace.sm) {
+                    AtomDot(type: .thought, size: 6).opacity(0.12)
+                    AtomDot(type: .task, size: 6).opacity(0.12)
+                    AtomDot(type: .decision, size: 6).opacity(0.12)
+                    AtomDot(type: .reference, size: 6).opacity(0.12)
+                }
+                .padding(.bottom, NSpace.xs)
+            }
             Text(emptyHeadline)
                 .font(NFont.mono(14))
                 .foregroundStyle(NSColorToken.textSecondary)
-            if let sub = emptySubline {
+            if !textActive && !tagActive {
+                // First-run legend — teach all five orb gestures, calm + restrained.
+                VStack(alignment: .leading, spacing: NSpace.sm) {
+                    ForEach(gestureHints, id: \.self) { hint in
+                        Text(hint)
+                            .font(NFont.mono(12))
+                            .foregroundStyle(NSColorToken.textGhostDim)
+                    }
+                }
+                .padding(.top, NSpace.sm)
+            } else if let sub = emptySubline {
                 Text(sub)
                     .font(NFont.mono(12))
                     .foregroundStyle(NSColorToken.textGhost)
@@ -125,6 +146,13 @@ private struct EmptyStateView: View {
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }
+    private let gestureHints = [
+        "// tap        → write",
+        "// hold       → speak",
+        "// swipe up    → search",
+        "// swipe right → tasks",
+        "// swipe left  → synthesis",
+    ]
     private var emptyHeadline: String {
         if textActive && tagActive { return "// nothing matches both filters" }
         if tagActive, let t = tag  { return "// nothing tagged \"\(t)\"" }
@@ -132,7 +160,7 @@ private struct EmptyStateView: View {
         return "// quiet."
     }
     private var emptySubline: String? {
-        if !textActive && !tagActive { return "// tap the orb to write. hold to speak." }
+        // Default (no filter) state is handled by the gesture legend, not this subline.
         if textActive && tagActive   { return nil }
         if tagActive, let t = tag    { return "// tap \"\(t)\" above to clear" }
         if textActive                { return "// try fewer words." }
@@ -175,10 +203,11 @@ extension StreamView {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(NSColorToken.textTertiary)
-                    .frame(width: 24, height: 24)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Clear filters")
         }
         .padding(.horizontal, NSpace.xs)
         .padding(.vertical, NSpace.xs)

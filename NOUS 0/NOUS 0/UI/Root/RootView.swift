@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
-import Accelerate
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct RootView: View {
     @Binding var pendingAtomID: UUID?
@@ -19,11 +21,13 @@ struct RootView: View {
     @State private var filter: String = ""
     @State private var tagFilter: String? = nil
     @State private var selectedAtom: AtomSnapshot?
+    @State private var relatedAtoms: [AtomSnapshot] = []
     @State private var sheet: Sheet = .none
     @State private var orbMode: OrbMode = .idle
     @State private var undoManager = DeleteUndoManager()
     @State private var pushbackVM: PushbackVM? = nil
     @State private var showPushback = false
+    @State private var showCompose = false
     @State private var activeMeetSession: NousBackendClient.ActiveMeetSession? = nil
 
     // Scroll-aware orb: minimize while user reads, restore when they look up.
@@ -78,7 +82,7 @@ struct RootView: View {
                 if let a = selectedAtom {
                     AtomDetailView(
                         atom: store.atoms[a.id] ?? a,
-                        related: related(for: a.id, store: store),
+                        related: relatedAtoms,
                         store: store,
                         morphNS: atomMorph,
                         onClose: { withAnimation(.nDrawer) { selectedAtom = nil } },
@@ -107,7 +111,7 @@ struct RootView: View {
                                     }
                                 },
                                 onDelete: { atom in undoManager.scheduleDelete(atom: atom, store: store) })
-                        .transition(.opacity)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 case .tasks:
                     TasksSheet(store: store,
                                onDismiss: { withAnimation(.nDrawer) { sheet = .none; orbMode = .idle } },
@@ -120,8 +124,7 @@ struct RootView: View {
                 case .synthesis:
                     SynthesisSheet(
                         store: store,
-                        backend: backend,
-                        userID: AppEnv.currentUserIDSync,
+                        gemini: gemini,
                         onDismiss: { withAnimation(.nDrawer) { sheet = .none; orbMode = .idle } },
                         onPickAtom: { a in
                             withAnimation(.nDrawer) { sheet = .none; orbMode = .idle; selectedAtom = a }
@@ -193,6 +196,15 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .task { bootstrap() }
         .task { await pollMeetSessions() }
+        // Compute related atoms off the MainActor whenever the open atom changes.
+        // Runs on appear, so AtomDetailView gets a valid array shortly after open.
+        .task(id: selectedAtom?.id) {
+            if let a = selectedAtom, let store {
+                relatedAtoms = await RelatedFinder.related(for: a.id, store: store, context: ctx)
+            } else {
+                relatedAtoms = []
+            }
+        }
         .onChange(of: pendingAtomID) { _, id in
             guard let id, let store, let atom = store.atoms[id] else { return }
             withAnimation(.nDrawer) { selectedAtom = atom }
@@ -200,6 +212,9 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background, let store { undoManager.flush(store: store) }
+            // Pull immediately when the app returns to foreground so data from
+            // other devices appears without waiting for the 30s periodic poll.
+            if phase == .active { sync?.pullNow() }
         }
         .animation(.nDrawer, value: sheet)
         .sheet(isPresented: $showPushback) {
@@ -212,6 +227,27 @@ struct RootView: View {
                 )
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+                .presentationBackground(NSColorToken.inkVoid)
+            }
+        }
+        // Compose-from-atoms. AccountSheet posts .nousOpenCompose; macOS handled it
+        // but iOS never listened, leaving the "compose" button dead. Now wired.
+        .onReceive(NotificationCenter.default.publisher(for: .nousOpenCompose)) { _ in
+            showCompose = true
+        }
+        .sheet(isPresented: $showCompose) {
+            if let store {
+                let composeUserID = AuthClient.shared.session?.userID ?? AppEnv.localUserID
+                ComposeSheet(
+                    store: store,
+                    backend: backend,
+                    userID: composeUserID,
+                    onDismiss: { showCompose = false },
+                    onPickAtom: { a in
+                        showCompose = false
+                        withAnimation(.nDrawer) { selectedAtom = a }
+                    }
+                )
                 .presentationBackground(NSColorToken.inkVoid)
             }
         }
@@ -253,6 +289,64 @@ struct RootView: View {
                         else if dx < -40 && abs(dx) > abs(dy) { openSynthesis() }
                     }
             )
+            .accessibilityLabel(orbAccessibilityLabel)
+            .accessibilityHint("Double-tap to write. Touch and hold to record voice.")
+            .accessibilityAction(named: "Write note") { openText() }
+            .accessibilityAction(named: "Search") { openSearch() }
+            .accessibilityAction(named: "Tasks") { openTasks() }
+            .accessibilityAction(named: "Synthesis") { openSynthesis() }
+            // Voice via long-press-drag is unusable for VoiceOver / Switch Control.
+            // Provide a gesture-free toggle: activate to record, activate again to
+            // stop and save.
+            .accessibilityAction(named: voice.isRecording ? "Stop and save voice note" : "Record voice note") {
+                accessibleVoiceToggle()
+            }
+    }
+
+    /// Gesture-free voice capture for assistive tech. Mirrors the gesture path's
+    /// stop→capture behavior without requiring long-press-and-drag.
+    private func accessibleVoiceToggle() {
+        if voice.isRecording {
+            Task {
+                let transcript = await voice.stop()
+                await MainActor.run {
+                    let t = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !t.isEmpty {
+                        _ = store?.capture(raw: t, type: .thought)
+                        Haptics.shared.saveConfirm()
+                    }
+                    orbMode = .idle
+                    announce(t.isEmpty ? "Discarded empty recording" : "Voice note saved")
+                }
+            }
+        } else {
+            Task {
+                await voice.start()
+                await MainActor.run {
+                    orbMode = .voice(amp: 0)
+                    announce("Recording. Activate the orb again to stop and save.")
+                }
+            }
+        }
+    }
+
+    /// Post a VoiceOver announcement (iOS only).
+    private func announce(_ message: String) {
+        #if os(iOS)
+        UIAccessibility.post(notification: .announcement, argument: message)
+        #endif
+    }
+
+    private var orbAccessibilityLabel: String {
+        switch orbMode {
+        case .idle:              return "NOUS orb"
+        case .voice(_):          return "Recording voice"
+        case .voiceCancelZone:   return "Release to cancel recording"
+        case .textActive:        return "Writing note"
+        case .refining:          return "Saving"
+        case .search:            return "Searching"
+        case .synthesis:         return "Synthesis"
+        }
     }
 
     /// Brief orb confirmation: textActive → refining → idle. Visual "atom landed" signal.
@@ -334,6 +428,10 @@ struct RootView: View {
 
     private func bootstrap() {
         guard store == nil else { return }
+        // Fetch API keys from the Supabase edge function post-auth. macOS does this
+        // in MacRootView.bootstrap(); iOS was missing it, so production keys
+        // (which live in RemoteConfig, not the compile-time fallback) never loaded.
+        Task { await RemoteConfig.shared.fetch() }
         let sync = SyncDaemon(context: ctx, supabase: supabase, gemini: gemini)
         let store = AtomStore(context: ctx, sync: sync, gemini: gemini)
         store.bootstrap()
@@ -359,59 +457,5 @@ struct RootView: View {
             }
             try? await Task.sleep(for: .seconds(30))
         }
-    }
-
-    // MARK: Related — semantic via cached EmbeddingRecord, lexical fallback
-
-    private func related(for id: UUID, store: AtomStore) -> [AtomSnapshot] {
-        let desc = FetchDescriptor<EmbeddingRecord>()
-        let allEmbs = (try? ctx.fetch(desc)) ?? []
-        guard let sourceRec = allEmbs.first(where: { $0.atomID == id }) else {
-            return lexicalRelated(for: id, store: store)
-        }
-        let sourceVec = sourceRec.toFloatArray()
-        guard !sourceVec.isEmpty else { return lexicalRelated(for: id, store: store) }
-
-        let results = allEmbs.compactMap { rec -> (AtomSnapshot, Float)? in
-            guard rec.atomID != id,
-                  let atom = store.atoms[rec.atomID],
-                  !atom.isDeleted else { return nil }
-            let vec = rec.toFloatArray()
-            guard vec.count == sourceVec.count else { return nil }
-            let sim = cosineSimilarity(sourceVec, vec)
-            return sim >= 0.55 ? (atom, sim) : nil
-        }
-        .sorted { $0.1 > $1.1 }
-        .prefix(4)
-        .map(\.0)
-
-        return results.isEmpty ? lexicalRelated(for: id, store: store) : Array(results)
-    }
-
-    private func lexicalRelated(for id: UUID, store: AtomStore) -> [AtomSnapshot] {
-        guard let a = store.atoms[id] else { return [] }
-        let candidates = store.ordered.filter { $0.id != id && !$0.isDeleted }
-        let wordsA = Set(a.displayContent.lowercased().split(separator: " ").map(String.init))
-        let tagsA = Set(a.tags.map(\.value))
-        let scored = candidates.map { c -> (AtomSnapshot, Double) in
-            var score = 0.0
-            if c.type == a.type { score += 0.3 }
-            score += Double(tagsA.intersection(Set(c.tags.map(\.value))).count) * 0.4
-            let wordsB = Set(c.displayContent.lowercased().split(separator: " ").map(String.init))
-            score += Double(wordsA.intersection(wordsB).count) * 0.05
-            let dt = abs(a.createdAt.timeIntervalSince(c.createdAt))
-            score += max(0, 1.0 - dt / (60 * 60 * 24 * 30)) * 0.1
-            return (c, score)
-        }
-        return scored.filter { $0.1 >= 0.5 }.sorted { $0.1 > $1.1 }.prefix(4).map(\.0)
-    }
-
-    private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
-        var dot: Float = 0
-        vDSP_dotpr(a, 1, b, 1, &dot, vDSP_Length(a.count))
-        var normA: Float = 0; vDSP_svesq(a, 1, &normA, vDSP_Length(a.count))
-        var normB: Float = 0; vDSP_svesq(b, 1, &normB, vDSP_Length(b.count))
-        let denom = sqrtf(normA) * sqrtf(normB)
-        return denom == 0 ? 0 : dot / denom
     }
 }

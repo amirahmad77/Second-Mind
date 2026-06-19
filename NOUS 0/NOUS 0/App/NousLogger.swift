@@ -78,6 +78,11 @@ enum NousLogger {
 
     private static func write(level: LogLevel, category: String, message: String, meta: [String: Any]) {
         let logger = osLogger(category: category)
+        // NOTE: os.Logger fields below are marked `privacy: .public` so message +
+        // meta are readable in Console.app / log stream on-device. This does NOT
+        // expose them to any cloud service. PII/secret redaction for the
+        // Axiom-bound payload happens in AxiomShipper.scrub(_:). Callers should
+        // still avoid putting verbatim transcript/speech/PII into `meta`.
         let metaStr = meta.isEmpty ? "" : " \(meta)"
         switch level {
         case .debug:   logger.debug("\(message, privacy: .public)\(metaStr, privacy: .public)")

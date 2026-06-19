@@ -6,9 +6,20 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		C1A55E0000000000000009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B9592F6E2F963AD30034F4CD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B9592F752F963AD30034F4CD;
+			remoteInfo = "NOUS 0";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		B9592F762F963AD30034F4CD /* NOUS 0.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "NOUS 0.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B9592F842F963AD40034F4CD /* NOUS 0/App/AppConfig.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "NOUS 0/App/AppConfig.xcconfig"; sourceTree = "<group>"; };
+		C1A55E0000000000000002 /* NOUS 0Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "NOUS 0Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -17,10 +28,22 @@
 			path = "NOUS 0";
 			sourceTree = "<group>";
 		};
+		C1A55E0000000000000003 /* NOUS 0Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "NOUS 0Tests";
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		B9592F732F963AD30034F4CD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1A55E0000000000000005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -34,6 +57,7 @@
 			isa = PBXGroup;
 			children = (
 				B9592F782F963AD30034F4CD /* NOUS 0 */,
+				C1A55E0000000000000003 /* NOUS 0Tests */,
 				B9592F772F963AD30034F4CD /* Products */,
 				B959314A2F9A512D0034F4CD /* Recovered References */,
 			);
@@ -43,6 +67,7 @@
 			isa = PBXGroup;
 			children = (
 				B9592F762F963AD30034F4CD /* NOUS 0.app */,
+				C1A55E0000000000000002 /* NOUS 0Tests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -80,6 +105,28 @@
 			productReference = B9592F762F963AD30034F4CD /* NOUS 0.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C1A55E0000000000000001 /* NOUS 0Tests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C1A55E0000000000000006 /* Build configuration list for PBXNativeTarget "NOUS 0Tests" */;
+			buildPhases = (
+				C1A55E0000000000000004 /* Sources */,
+				C1A55E0000000000000005 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C1A55E000000000000000A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C1A55E0000000000000003 /* NOUS 0Tests */,
+			);
+			name = "NOUS 0Tests";
+			packageProductDependencies = (
+			);
+			productName = "NOUS 0Tests";
+			productReference = C1A55E0000000000000002 /* NOUS 0Tests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -92,6 +139,10 @@
 				TargetAttributes = {
 					B9592F752F963AD30034F4CD = {
 						CreatedOnToolsVersion = 26.4.1;
+					};
+					C1A55E0000000000000001 = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = B9592F752F963AD30034F4CD;
 					};
 				};
 			};
@@ -110,6 +161,7 @@
 			projectRoot = "";
 			targets = (
 				B9592F752F963AD30034F4CD /* NOUS 0 */,
+				C1A55E0000000000000001 /* NOUS 0Tests */,
 			);
 		};
 /* End PBXProject section */
@@ -132,7 +184,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C1A55E0000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C1A55E000000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B9592F752F963AD30034F4CD /* NOUS 0 */;
+			targetProxy = C1A55E0000000000000009 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B9592F7F2F963AD40034F4CD /* Debug */ = {
@@ -257,6 +324,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "NOUS 0/App/NOUS_0.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 95Z83CMC8G;
@@ -265,7 +333,9 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=macosx*]" = "NOUS listens on localhost so the NOUS Chrome extension can send participant names.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "NOUS uses the microphone for voice capture when you hold the orb.";
+				"INFOPLIST_KEY_NSScreenCaptureUsageDescription[sdk=macosx*]" = "NOUS captures system audio to transcribe your meetings in real time.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "NOUS transcribes your voice locally so held-orb capture becomes text.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -275,6 +345,8 @@
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIAppFonts[sdk=iphoneos*]" = "DepartureMono-Regular.otf";
+				"INFOPLIST_KEY_UIAppFonts[sdk=iphonesimulator*]" = "DepartureMono-Regular.otf";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
@@ -304,6 +376,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "NOUS 0/App/NOUS_0.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 95Z83CMC8G;
@@ -312,7 +385,9 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=macosx*]" = "NOUS listens on localhost so the NOUS Chrome extension can send participant names.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "NOUS uses the microphone for voice capture when you hold the orb.";
+				"INFOPLIST_KEY_NSScreenCaptureUsageDescription[sdk=macosx*]" = "NOUS captures system audio to transcribe your meetings in real time.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "NOUS transcribes your voice locally so held-orb capture becomes text.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -322,6 +397,8 @@
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIAppFonts[sdk=iphoneos*]" = "DepartureMono-Regular.otf";
+				"INFOPLIST_KEY_UIAppFonts[sdk=iphonesimulator*]" = "DepartureMono-Regular.otf";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
@@ -345,6 +422,54 @@
 			};
 			name = Release;
 		};
+		C1A55E0000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 95Z83CMC8G;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nous-core.NOUS-0Tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NOUS 0.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NOUS 0";
+				XROS_DEPLOYMENT_TARGET = 26.4;
+			};
+			name = Debug;
+		};
+		C1A55E0000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 95Z83CMC8G;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nous-core.NOUS-0Tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NOUS 0.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NOUS 0";
+				XROS_DEPLOYMENT_TARGET = 26.4;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -362,6 +487,15 @@
 			buildConfigurations = (
 				B9592F822F963AD40034F4CD /* Debug */,
 				B9592F832F963AD40034F4CD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C1A55E0000000000000006 /* Build configuration list for PBXNativeTarget "NOUS 0Tests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1A55E0000000000000007 /* Debug */,
+				C1A55E0000000000000008 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

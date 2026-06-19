@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreText
 
 enum NSColorToken {
     static let inkVoid        = Color.oklch(0.10, 0.012, 240)
@@ -11,6 +12,12 @@ enum NSColorToken {
     static let textSecondary  = Color.oklch(0.72, 0.008, 240)
     static let textTertiary   = Color.oklch(0.52, 0.010, 240)
     static let textGhost      = Color.oklch(0.36, 0.012, 240)
+    /// Solid dim tier for small chrome (timestamps, tags, hints). Use this INSTEAD
+    /// of `textGhost.opacity(0.4–0.55)`: stacking opacity on the darkest text tier
+    /// over `inkVoid` drops effective contrast below WCAG AA. L≈0.50 reads subtly
+    /// dim but stays legible (~6:1 on inkVoid). Reserve raw `textGhost` for true
+    /// decorative hairlines, not legible text.
+    static let textGhostDim   = Color.oklch(0.50, 0.012, 240)
 
     enum Phos {
         static let cyan   = Color.oklch(0.82, 0.16, 200)
@@ -30,9 +37,8 @@ enum NSpace {
 
 /// Font stack: primary picks if bundled, else graceful fallbacks. All ship-safe.
 enum NFont {
-    // Display (day headers) — heavy compressed sans. Signage/silkscreen register
-    // over the old serif-italic, so day markers read like industrial labels on
-    // TE hardware rather than magazine callouts.
+    // Display (day headers) — heavy compressed sans. Signage/silkscreen register.
+    // Day markers read like industrial labels on TE hardware.
     static func dayHeader(_ size: CGFloat = 28) -> Font {
         Font.system(size: size, weight: .heavy, design: .default)
             .width(.compressed)
@@ -44,13 +50,55 @@ enum NFont {
     static func detailBody(_ size: CGFloat = 17) -> Font {
         Font.system(size: size, weight: .regular, design: .default)
     }
-    // Mono — instrument register. System mono is adequate until Berkeley/Departure bundled.
+    // Mono — instrument-panel register.
+    // Departure Mono (bundled) preferred: distinctive, open-source, TE-adjacent.
+    // Falls back to SF Mono (system) if font load fails.
     static func mono(_ size: CGFloat = 11) -> Font {
-        Font.system(size: size, weight: .regular, design: .monospaced)
+        if NFont.departureMono {
+            return Font.custom("DepartureMono-Regular", size: size)
+        }
+        return Font.system(size: size, weight: .regular, design: .monospaced)
     }
     static func monoSmall(_ size: CGFloat = 10) -> Font {
-        Font.system(size: size, weight: .medium, design: .monospaced)
+        if NFont.departureMono {
+            return Font.custom("DepartureMono-Regular", size: size)
+        }
+        return Font.system(size: size, weight: .medium, design: .monospaced)
     }
+
+    /// Registers all .otf/.ttf files in the app bundle with CoreText.
+    /// Call once at app init before any view body runs.
+    /// iOS: redundant (UIAppFonts handles it), but harmless.
+    /// macOS sandbox: CTFontManagerRegisterFontsForURL is the only reliable path.
+    static func registerBundledFonts() {
+        let bundle = Bundle.main
+        let extensions = ["otf", "ttf"]
+        for ext in extensions {
+            guard let urls = bundle.urls(forResourcesWithExtension: ext, subdirectory: nil) else { continue }
+            for url in urls {
+                var error: Unmanaged<CFError>?
+                CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
+                // Ignore "already registered" errors (kCTFontManagerErrorAlreadyRegistered = 105)
+                if let err = error?.takeRetainedValue() {
+                    let code = CFErrorGetCode(err)
+                    if code != 105 {
+                        NousLogger.warning("font", "font registration failed",
+                                           ["file": url.lastPathComponent, "code": code])
+                    }
+                }
+            }
+        }
+    }
+
+    /// True when Departure Mono loaded successfully. Checked after registerBundledFonts().
+    /// Uses CoreText — available on all Apple platforms, no UIKit/AppKit import needed.
+    static let departureMono: Bool = {
+        let descriptor = CTFontDescriptorCreateWithNameAndSize(
+            "DepartureMono-Regular" as CFString, 12)
+        let font = CTFontCreateWithFontDescriptor(descriptor, 12, nil)
+        let psName = CTFontCopyPostScriptName(font) as String
+        return psName == "DepartureMono-Regular"
+    }()
 }
 
 // MARK: - Dynamic Type body font

@@ -31,6 +31,9 @@ struct MacSidebar: View {
     /// Local presentation of the constellation graph — same self-contained pattern
     /// as the briefing; never routed through MacRootView.
     @State private var showGraph = false
+    /// Local presentation of the entities / people surface — same self-contained
+    /// pattern as the briefing and graph; never routed through MacRootView.
+    @State private var showEntities = false
 
     var body: some View {
         List(selection: $selection) {
@@ -40,6 +43,7 @@ struct MacSidebar: View {
             Section {
                 briefingRow
                 constellationRow
+                entitiesRow
             }
 
             // ── Primary navigation ────────────────────────────────────────────
@@ -110,6 +114,26 @@ struct MacSidebar: View {
                 onClose: { showGraph = false }
             )
         }
+        .sheet(isPresented: $showEntities) {
+            EntitiesView(
+                store: store,
+                onPickAtom: { atom in
+                    // Same decoupled path as the briefing/graph: dismiss the
+                    // sheet, surface the stream pane, and broadcast the atom id
+                    // for MacRootView (its private selection state) to open.
+                    showEntities = false
+                    selection = .stream
+                    NotificationCenter.default.post(
+                        name: .nousSelectAtom,
+                        object: nil,
+                        userInfo: ["atomID": atom.id.uuidString]
+                    )
+                    NousLogger.info("store", "entities pick → select atom",
+                                    ["id": atom.id.uuidString])
+                },
+                onClose: { showEntities = false }
+            )
+        }
     }
 
     // MARK: – Wordmark header
@@ -171,6 +195,28 @@ struct MacSidebar: View {
             } icon: {
                 Image(systemName: "circle.hexagongrid")
                     .foregroundStyle(NSColorToken.Phos.violet)
+                    .imageScale(.small)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+    }
+
+    // MARK: – Entities row
+
+    private var entitiesRow: some View {
+        Button {
+            showEntities = true
+        } label: {
+            Label {
+                Text("// entities")
+                    .font(NFont.mono(12))
+                    .foregroundStyle(NSColorToken.textSecondary)
+            } icon: {
+                Image(systemName: "person.2")
+                    .foregroundStyle(NSColorToken.Phos.cyan)
                     .imageScale(.small)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

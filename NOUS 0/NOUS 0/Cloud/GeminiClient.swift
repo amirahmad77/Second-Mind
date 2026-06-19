@@ -362,6 +362,136 @@ actor GeminiClient {
         return out
     }
 
+    // MARK: Entity / people extraction
+
+    /// A named entity surfaced from a refined atom. `kind` is one of
+    /// person / org / project / topic.
+    struct ExtractedEntity: Sendable {
+        let name: String
+        let kind: String
+    }
+
+    /// Recognised entity kinds. Anything outside this set is dropped so the
+    /// EntitiesView only ever sees the four sections it renders.
+    private static let entityKinds: Set<String> = ["person", "org", "project", "topic"]
+
+    /// Extracts named entities (people, orgs, projects, topics) from refined text.
+    /// Structured-output call (responseSchema, mirrors `refine` / `extractActionItems`).
+    /// Names are lightly normalized (trim + whitespace collapse, display case kept),
+    /// deduped case-insensitively, and capped at 8. Returns [] when the key is unset
+    /// so the caller no-ops cleanly.
+    func extractEntities(from text: String) async throws -> [ExtractedEntity] {
+        guard !resolvedKey.isEmpty else {
+            NousLogger.warning("gemini", "extractEntities skipped — API key not configured")
+            return []
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        let systemPrompt = """
+        You read a refined note and extract the named entities it mentions.
+        Classify each entity's `kind` as exactly one of:
+        - "person"  → a named individual (e.g. "Alex Chen", "Sam").
+        - "org"     → a company, team, or institution (e.g. "Supabase", "Stripe").
+        - "project" → a named initiative, product, or workstream (e.g. "Q2 Launch", "Atlas").
+        - "topic"   → a concrete subject or domain the note is about (e.g. "row-level security").
+        Rules:
+        - Only extract entities that are genuinely named or specific. Skip generic words.
+        - Use the entity's natural display casing.
+        - Deduplicate near-identical mentions; pick the fullest form.
+        - Max 8 entities. Return an empty array if nothing specific stands out.
+        Output JSON: { "entities": [{ "name": string, "kind": string }] }
+        """
+
+        let body: [String: Any] = [
+            "systemInstruction": [
+                "role": "system",
+                "parts": [["text": systemPrompt]]
+            ],
+            "contents": [
+                ["role": "user", "parts": [["text": trimmed]]]
+            ],
+            "generationConfig": [
+                "temperature": 0.1,
+                "responseMimeType": "application/json",
+                "responseSchema": [
+                    "type": "OBJECT",
+                    "properties": [
+                        "entities": [
+                            "type": "ARRAY",
+                            "items": [
+                                "type": "OBJECT",
+                                "properties": [
+                                    "name": ["type": "STRING"],
+                                    "kind": [
+                                        "type": "STRING",
+                                        "enum": ["person", "org", "project", "topic"]
+                                    ]
+                                ],
+                                "required": ["name", "kind"]
+                            ],
+                            "maxItems": 8
+                        ]
+                    ],
+                    "required": ["entities"]
+                ]
+            ]
+        ]
+
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(AppEnv.geminiRefineModel):generateContent")!
+        var req = URLRequest(url: url, timeoutInterval: 25)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(resolvedKey, forHTTPHeaderField: "x-goog-api-key")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, resp) = try await session.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            NousLogger.error("gemini", "extractEntities HTTP \(status)",
+                             ["model": AppEnv.geminiRefineModel, "body": String(bodyStr.prefix(400))])
+            throw NSError(domain: "Gemini.extractEntities", code: status,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(status): \(bodyStr.prefix(200))"])
+        }
+
+        struct Part: Decodable { let text: String? }
+        struct Content: Decodable { let parts: [Part]? }
+        struct Cand: Decodable { let content: Content? }
+        struct Resp: Decodable { let candidates: [Cand]? }
+        let envelope = try JSONDecoder().decode(Resp.self, from: data)
+        let payloadText = envelope.candidates?.first?.content?.parts?.compactMap(\.text).joined() ?? ""
+
+        struct RawEntity: Decodable { let name: String; let kind: String }
+        struct Inner: Decodable { let entities: [RawEntity]? }
+        guard let payloadData = payloadText.data(using: .utf8), !payloadText.isEmpty else {
+            NousLogger.error("gemini", "extractEntities empty payload",
+                             ["candidates": envelope.candidates?.count ?? 0])
+            throw NSError(domain: "Gemini.extractEntities", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "empty payload"])
+        }
+        let inner = try JSONDecoder().decode(Inner.self, from: payloadData)
+
+        // Normalize lightly (trim + collapse whitespace, keep display case), validate
+        // kind, dedupe case-insensitively, cap at 8.
+        var seen = Set<String>()
+        var out: [ExtractedEntity] = []
+        for raw in (inner.entities ?? []) {
+            let name = raw.name
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let kind = raw.kind.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, Self.entityKinds.contains(kind) else { continue }
+            let key = name.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            out.append(ExtractedEntity(name: name, kind: kind))
+            if out.count >= 8 { break }
+        }
+        NousLogger.info("gemini", "extractEntities ok", ["count": out.count])
+        return out
+    }
+
     // MARK: Meeting transcription (audio → diarized transcript)
 
     /// Sends mic + optional system-audio data to Gemini Flash 1.5 for transcription

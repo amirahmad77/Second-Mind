@@ -237,6 +237,140 @@ final class SyncDaemon {
         } catch {
             NousLogger.error("sync", "embed failed", ["atomID": atomID.uuidString, "error": error.localizedDescription])
         }
+
+        // Long atoms (meetings, long notes) additionally fan out into per-passage
+        // chunk vectors so retrieval can surface a specific passage. Resilient:
+        // failures log + skip and never block the main embed above.
+        let isMeeting = Self.reconstructType(rows) == .meeting
+        if isMeeting || text.count > Self.chunkLengthThreshold {
+            await embedChunks(atomID: atomID, text: text)
+        }
+    }
+
+    // MARK: - Meeting transcript chunking
+
+    /// Atoms longer than this (chars) warrant chunked embedding even when not typed
+    /// as `.meeting`. ~1500 chars keeps each passage well under the embed token cap.
+    private static let chunkLengthThreshold = 1500
+    private static let chunkTargetChars = 1500
+    private static let chunkOverlapChars = 100
+    /// Bound cost: at most this many chunk embeddings per atom.
+    private static let maxChunksPerAtom = 40
+
+    /// Splits `text` into passages and embeds each one sequentially on the existing
+    /// serialized embed pipeline (this runs inside `embedTask`, so no parallel
+    /// Gemini fan-out). Deletes prior chunks for the atom first to avoid dupes on
+    /// re-embed. Per-passage failures are logged and skipped.
+    private func embedChunks(atomID: UUID, text: String) async {
+        var passages = Self.chunk(text)
+        guard !passages.isEmpty else { return }
+        if passages.count > Self.maxChunksPerAtom {
+            NousLogger.warning("sync", "meeting chunks capped",
+                               ["atomID": atomID.uuidString,
+                                "produced": passages.count,
+                                "cap": Self.maxChunksPerAtom])
+            passages = Array(passages.prefix(Self.maxChunksPerAtom))
+        }
+
+        // Dedupe on re-embed: drop any existing chunk rows for this atom first.
+        let existingDesc = FetchDescriptor<MeetingChunkRecord>(
+            predicate: #Predicate { $0.atomID == atomID })
+        let existing = (try? context.fetch(existingDesc)) ?? []
+        for row in existing { context.delete(row) }
+        if !existing.isEmpty { try? context.save() }
+
+        var stored = 0
+        for (index, passage) in passages.enumerated() {
+            let trimmed = passage.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.count >= 16 else { continue } // skip trivial fragments
+            do {
+                let vec = try await gemini.embed(trimmed, taskType: .document)
+                let rec = MeetingChunkRecord(
+                    atomID: atomID, chunkIndex: index, text: trimmed, dim: vec.count,
+                    vector: Data(bytes: vec, count: vec.count * MemoryLayout<Float>.size))
+                context.insert(rec)
+                stored += 1
+            } catch {
+                NousLogger.error("sync", "chunk embed failed",
+                                 ["atomID": atomID.uuidString, "chunk": index,
+                                  "error": error.localizedDescription])
+                continue
+            }
+        }
+        if stored > 0 {
+            try? context.save()
+            NousLogger.info("sync", "meeting chunks embedded",
+                            ["atomID": atomID.uuidString, "chunks": stored])
+        }
+    }
+
+    /// Deterministic passage splitter. Accumulates paragraph/sentence segments into
+    /// ~`chunkTargetChars` windows, carrying ~`chunkOverlapChars` of trailing context
+    /// into the next window so a fact straddling a boundary survives in both.
+    static func chunk(_ text: String,
+                      target: Int = SyncDaemon.chunkTargetChars,
+                      overlap: Int = SyncDaemon.chunkOverlapChars) -> [String] {
+        let segments = splitSegments(text)
+        guard !segments.isEmpty else { return [] }
+
+        var passages: [String] = []
+        var current = ""
+        for seg in segments {
+            if current.isEmpty {
+                current = seg
+            } else if current.count + 1 + seg.count <= target {
+                current += " " + seg
+            } else {
+                passages.append(current)
+                // Carry an overlap tail from the just-closed passage.
+                let tail = overlap > 0 ? String(current.suffix(overlap)) : ""
+                current = tail.isEmpty ? seg : tail + " " + seg
+            }
+        }
+        if !current.isEmpty { passages.append(current) }
+        return passages
+    }
+
+    /// Breaks text on paragraph boundaries first, then sentence boundaries, then
+    /// hard-slices any single segment that still exceeds the target window.
+    private static func splitSegments(_ text: String) -> [String] {
+        let paragraphs = text
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        var out: [String] = []
+        for para in paragraphs {
+            if para.count <= chunkTargetChars { out.append(para); continue }
+            // Sentence-level split for oversized paragraphs.
+            var sentence = ""
+            for ch in para {
+                sentence.append(ch)
+                if ch == "." || ch == "!" || ch == "?" {
+                    let s = sentence.trimmingCharacters(in: .whitespaces)
+                    if !s.isEmpty { out.append(s) }
+                    sentence = ""
+                }
+            }
+            let tail = sentence.trimmingCharacters(in: .whitespaces)
+            if !tail.isEmpty { out.append(tail) }
+        }
+
+        // Final guard: hard-slice any segment still larger than the target so a
+        // single run-on never produces an oversized embed request.
+        return out.flatMap { seg -> [String] in
+            guard seg.count > chunkTargetChars else { return [seg] }
+            var pieces: [String] = []
+            var rest = Substring(seg)
+            while !rest.isEmpty {
+                let end = rest.index(rest.startIndex,
+                                     offsetBy: chunkTargetChars,
+                                     limitedBy: rest.endIndex) ?? rest.endIndex
+                pieces.append(String(rest[rest.startIndex..<end]))
+                rest = rest[end...]
+            }
+            return pieces
+        }
     }
 
     private static func reconstructText(_ rows: [NoteEventRecord]) -> String? {
@@ -248,5 +382,14 @@ final class SyncDaemon {
             if refined != nil && raw != nil { break }
         }
         return refined ?? raw
+    }
+
+    /// Newest known atom type from the event ledger (refine/typeChanged carry it).
+    private static func reconstructType(_ rows: [NoteEventRecord]) -> AtomType? {
+        for r in rows {
+            guard let e = r.toEvent() else { continue }
+            if let t = e.payload.type { return t }
+        }
+        return nil
     }
 }

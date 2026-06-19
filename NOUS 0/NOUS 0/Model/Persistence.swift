@@ -10,7 +10,7 @@ enum NousStore {
     static let appGroupID = "group.com.nous-core.NOUS-0"
 
     static let shared: ModelContainer = {
-        let schema = Schema([NoteEventRecord.self, EmbeddingRecord.self])
+        let schema = Schema([NoteEventRecord.self, EmbeddingRecord.self, MeetingChunkRecord.self])
         do {
             let config = ModelConfiguration(schema: schema,
                                             groupContainer: .identifier(appGroupID))
@@ -102,6 +102,32 @@ final class EmbeddingRecord {
     var updatedAt: Date
     init(atomID: UUID, dim: Int, vector: Data, updatedAt: Date = .now) {
         self.atomID = atomID; self.dim = dim; self.vector = vector; self.updatedAt = updatedAt
+    }
+
+    func toFloatArray() -> [Float] {
+        vector.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+    }
+}
+
+/// Per-passage embedding for long atoms (meetings, long notes). One atom fans out
+/// to N chunk vectors so "ask your meetings" retrieves the relevant passage rather
+/// than a single blurry whole-meeting vector. Bytes = Float32 little-endian packed,
+/// same layout as `EmbeddingRecord`. A chunk hit cites its parent atom (`atomID`).
+@Model
+final class MeetingChunkRecord {
+    #Index<MeetingChunkRecord>([\.atomID, \.chunkIndex])
+    @Attribute(.unique) var id: UUID
+    var atomID: UUID
+    var chunkIndex: Int
+    var text: String
+    var dim: Int
+    var vector: Data
+    var updatedAt: Date
+
+    init(id: UUID = UUID(), atomID: UUID, chunkIndex: Int, text: String,
+         dim: Int, vector: Data, updatedAt: Date = .now) {
+        self.id = id; self.atomID = atomID; self.chunkIndex = chunkIndex
+        self.text = text; self.dim = dim; self.vector = vector; self.updatedAt = updatedAt
     }
 
     func toFloatArray() -> [Float] {

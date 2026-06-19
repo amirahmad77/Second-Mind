@@ -293,6 +293,7 @@ final class AtomStore {
         apply(ev, persist: true)
         rebuildOrdered()
         ReminderScheduler.cancel(atomID: id)   // R3
+        clearEntities(for: id, prune: true)    // drop from the entity index
     }
 
     func addTag(id: UUID, tag: String) {
@@ -325,6 +326,7 @@ final class AtomStore {
             let ev = NoteEvent(atomID: id, kind: .deleted, payload: .init())
             apply(ev, persist: true)
             ReminderScheduler.cancel(atomID: id)   // R3 — mirror single delete
+            clearEntities(for: id, prune: true)    // mirror single delete
             deleted += 1
         }
         rebuildOrdered()
@@ -524,6 +526,10 @@ final class AtomStore {
                 if finalType == .meeting {
                     self.extractMeetingActionItems(for: id, refined: result.refined)
                 }
+                // Entity / people extraction — same fire-and-forget pattern as the
+                // suggestion passes above. Only ever runs for the atom being refined
+                // (generated task atoms never reach startRefine), so it can't storm.
+                self.extractEntities(for: id, refined: result.refined)
             } catch {
                 NousLogger.error("store", "startRefine failed", ["id": id.uuidString, "error": error.localizedDescription])
                 let failures = (self.refineFailures[id] ?? 0) + 1
@@ -849,6 +855,114 @@ final class AtomStore {
 
         NousLogger.info("store", "near-duplicates merged",
                         ["keep": keep.uuidString, "drop": drop.uuidString])
+    }
+
+    // MARK: - Entity / people index
+
+    /// atom → its extracted entity display names. Surfaced for callers that want the
+    /// per-atom view (e.g. a detail chip strip). Built incrementally as atoms refine.
+    private(set) var entitiesByAtom: [UUID: [String]] = [:]
+
+    /// Canonical index keyed by lowercased entity name. Stores the chosen display
+    /// `kind`, a representative display `name`, and the set of atoms mentioning it.
+    /// Backs both public read APIs so dedupe + counts stay consistent.
+    private var entityIndex: [String: (kind: String, name: String, atoms: Set<UUID>)] = [:]
+
+    /// All known entities, deduped across atoms, sorted by mention count (desc),
+    /// then alphabetically. Counts reflect only live (non-deleted) mentions.
+    func allEntities() -> [(name: String, kind: String, count: Int)] {
+        entityIndex.values
+            .compactMap { entry -> (name: String, kind: String, count: Int)? in
+                let liveCount = entry.atoms.filter { atoms[$0]?.isDeleted == false }.count
+                guard liveCount > 0 else { return nil }
+                return (name: entry.name, kind: entry.kind, count: liveCount)
+            }
+            .sorted {
+                $0.count != $1.count
+                    ? $0.count > $1.count
+                    : $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+    }
+
+    /// Live, non-deleted atoms mentioning `name` (case-insensitive), newest-first.
+    func atoms(forEntity name: String) -> [AtomSnapshot] {
+        let key = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let entry = entityIndex[key] else { return [] }
+        return entry.atoms
+            .compactMap { atoms[$0] }
+            .filter { !$0.isDeleted }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// Fire-and-forget entity extraction for a freshly-refined atom. Mirrors the
+    /// link-suggestion / duplicate-detection / meeting-action-item passes: runs only
+    /// when Gemini is reachable (resolvedKey gate inside `extractEntities` makes it a
+    /// clean no-op otherwise), never blocks or fails refine, and only ever runs for the
+    /// atom being refined — generated task atoms never call startRefine, so they can't
+    /// trigger an extraction storm.
+    private func extractEntities(for atomID: UUID, refined: String) {
+        let trimmed = refined.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let entities: [GeminiClient.ExtractedEntity]
+            do {
+                entities = try await self.gemini.extractEntities(from: trimmed)
+            } catch {
+                NousLogger.warning("store", "extractEntities failed",
+                                   ["id": atomID.uuidString, "error": error.localizedDescription])
+                return
+            }
+            // Atom may have been deleted while the call was in flight.
+            guard self.atoms[atomID]?.isDeleted == false else { return }
+            self.mergeEntities(entities, for: atomID)
+        }
+    }
+
+    /// Merges a fresh extraction result into the index for `atomID`. Replaces the
+    /// atom's prior contribution (a re-refine can change its entities) so stale names
+    /// don't linger. Runs on the MainActor (AtomStore isolation).
+    private func mergeEntities(_ entities: [GeminiClient.ExtractedEntity], for atomID: UUID) {
+        // Drop this atom's previous contribution before re-adding.
+        clearEntities(for: atomID, prune: true)
+
+        var displayNames: [String] = []
+        for entity in entities {
+            let key = entity.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { continue }
+            displayNames.append(entity.name)
+            if var existing = entityIndex[key] {
+                existing.atoms.insert(atomID)
+                entityIndex[key] = existing
+            } else {
+                entityIndex[key] = (kind: entity.kind, name: entity.name, atoms: [atomID])
+            }
+        }
+        if displayNames.isEmpty {
+            entitiesByAtom[atomID] = nil
+        } else {
+            entitiesByAtom[atomID] = displayNames
+            NousLogger.info("store", "entities indexed",
+                            ["id": atomID.uuidString, "count": "\(displayNames.count)"])
+        }
+    }
+
+    /// Removes an atom's contribution from the entity index. Called on delete and
+    /// before re-merging on a fresh extraction. When `prune` is true, any index entry
+    /// left with no atoms is removed entirely.
+    private func clearEntities(for atomID: UUID, prune: Bool) {
+        guard let names = entitiesByAtom[atomID] else { return }
+        for name in names {
+            let key = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard var entry = entityIndex[key] else { continue }
+            entry.atoms.remove(atomID)
+            if prune && entry.atoms.isEmpty {
+                entityIndex[key] = nil
+            } else {
+                entityIndex[key] = entry
+            }
+        }
+        entitiesByAtom[atomID] = nil
     }
 
     // MARK: - Stream grouping

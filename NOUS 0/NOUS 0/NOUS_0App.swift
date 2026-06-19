@@ -97,6 +97,9 @@ struct NOUS_0App: App {
                 }
             }
             .onAppear {
+                // Drain any pending App Intent (Capture/Search to NOUS) that
+                // launched the app, routing it to the capture/palette surfaces.
+                NousIntentInbox.drain()
                 // Re-assert .regular after SwiftUI scene setup, which can
                 // silently downgrade policy back to .accessory on macOS 26.
                 NSApplication.shared.setActivationPolicy(.regular)
@@ -189,6 +192,9 @@ struct NOUS_0App: App {
                 if let uuid = UUID(uuidString: id) { pendingAtomID = uuid }
             }
             .onAppear {
+                // Drain any pending App Intent (Capture/Search to NOUS) that
+                // launched the app.
+                NousIntentInbox.drain()
                 ProactiveNotificationDelegate.shared.onAtomTapped = { id in
                     pendingAtomID = id
                 }

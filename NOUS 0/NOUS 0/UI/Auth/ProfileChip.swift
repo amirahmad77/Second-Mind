@@ -74,6 +74,11 @@ private struct AccountSheet: View {
     @State private var confirming = false
     @State private var signingOut = false
     @State private var confirmingDelete = false
+    #if os(iOS) || os(visionOS)
+    // iOS/visionOS entry point to the shared settings surface. macOS reaches
+    // SettingsView via the ⌘, Settings scene, so it's not wired here.
+    @State private var showSettings = false
+    #endif
     @State private var deleting = false
     @State private var deleteError: String?
     @State private var showPair = false
@@ -100,6 +105,32 @@ private struct AccountSheet: View {
                         .foregroundStyle(NSColorToken.textSecondary)
                 }
             }
+
+            #if os(iOS) || os(visionOS)
+            // Settings → presents the shared SettingsView. macOS uses the ⌘,
+            // Settings scene instead, so this row is iOS/visionOS-only.
+            Button {
+                Haptics.shared.softTick()
+                showSettings = true
+            } label: {
+                HStack {
+                    Text("settings")
+                        .font(NFont.body(15))
+                        .foregroundStyle(NSColorToken.textPrimary)
+                    Spacer()
+                    Text("→")
+                        .font(NFont.mono(13))
+                        .foregroundStyle(NSColorToken.Phos.cyan)
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, NSpace.md)
+                .background(NSColorToken.inkRaised)
+                .overlay(Rectangle().stroke(NSColorToken.textGhost.opacity(0.45), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Settings")
+            .accessibilityHint("Opens app settings")
+            #endif
 
             Spacer(minLength: 0)
 
@@ -327,6 +358,14 @@ private struct AccountSheet: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(NSColorToken.inkPaper)
         }
+        #if os(iOS) || os(visionOS)
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(NSColorToken.inkPaper)
+        }
+        #endif
     }
 
     // MARK: – Export all notes

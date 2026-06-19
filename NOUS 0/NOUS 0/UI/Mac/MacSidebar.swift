@@ -24,9 +24,20 @@ struct MacSidebar: View {
     let store: AtomStore
 
     @State private var typeFilterExpanded = true
+    @State private var showAccount = false
+    /// Local presentation of the daily briefing — kept self-contained inside the
+    /// sidebar so we don't thread state through MacRootView.
+    @State private var showBriefing = false
 
     var body: some View {
         List(selection: $selection) {
+            // ── Today / briefing ──────────────────────────────────────────────
+            // Stand-alone button (not a List selection tag): tapping presents the
+            // briefing sheet rather than swapping the detail pane.
+            Section {
+                briefingRow
+            }
+
             // ── Primary navigation ────────────────────────────────────────────
             Section {
                 navRow(item: .stream,    label: "// stream",     icon: "waveform")
@@ -50,6 +61,50 @@ struct MacSidebar: View {
         }
         .frame(minWidth: 180)
         .toolbar(removing: .sidebarToggle)
+        .sheet(isPresented: $showBriefing) {
+            DailyBriefingView(
+                vm: DailyBriefingVM(store: store),
+                onPickAtom: { atom in
+                    // Dismiss the briefing, surface the stream pane, and broadcast
+                    // the atom id. MacRootView owns the actual selection state
+                    // (its private `selectedAtomID`); posting the notification lets
+                    // it (or any future observer) open the atom without coupling
+                    // this sheet to MacRootView internals.
+                    showBriefing = false
+                    selection = .stream
+                    NotificationCenter.default.post(
+                        name: .nousSelectAtom,
+                        object: nil,
+                        userInfo: ["atomID": atom.id.uuidString]
+                    )
+                    NousLogger.info("store", "briefing pick → select atom",
+                                    ["id": atom.id.uuidString])
+                },
+                onClose: { showBriefing = false }
+            )
+        }
+    }
+
+    // MARK: – Briefing row
+
+    private var briefingRow: some View {
+        Button {
+            showBriefing = true
+        } label: {
+            Label {
+                Text("// today")
+                    .font(NFont.mono(12))
+                    .foregroundStyle(NSColorToken.textSecondary)
+            } icon: {
+                Image(systemName: "sun.max")
+                    .foregroundStyle(NSColorToken.Phos.amber)
+                    .imageScale(.small)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
     }
 
     // MARK: – Nav row
@@ -109,31 +164,190 @@ struct MacSidebar: View {
     // MARK: – Profile footer
 
     private var profileFooter: some View {
-        HStack(spacing: NSpace.sm) {
-            Circle()
-                .fill(NSColorToken.inkRaised)
-                .frame(width: 22, height: 22)
-                .overlay {
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(NSColorToken.textGhost)
-                }
-            Text(AuthClient.shared.session?.email ?? "// signed in")
-                .font(NFont.mono(10))
-                .foregroundStyle(NSColorToken.textTertiary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
+        Button {
+            showAccount = true
+        } label: {
+            HStack(spacing: NSpace.sm) {
+                Circle()
+                    .fill(NSColorToken.inkRaised)
+                    .frame(width: 22, height: 22)
+                    .overlay {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(NSColorToken.textGhost)
+                    }
+                Text(AuthClient.shared.session?.email ?? "// signed in")
+                    .font(NFont.mono(10))
+                    .foregroundStyle(NSColorToken.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 9))
+                    .foregroundStyle(NSColorToken.textGhost.opacity(0.5))
+            }
+            .padding(.horizontal, NSpace.md)
+            .padding(.vertical, NSpace.sm)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, NSpace.md)
-        .padding(.vertical, NSpace.sm)
+        .buttonStyle(.plain)
         .background(NSColorToken.inkPaper)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(NSColorToken.textGhost.opacity(0.12))
                 .frame(height: 0.5)
         }
+        .popover(isPresented: $showAccount, arrowEdge: .top) {
+            MacAccountPopover()
+        }
     }
+}
+
+// MARK: – Account popover
+
+private struct MacAccountPopover: View {
+    @State private var confirmSignOut = false
+    @State private var confirmDelete  = false
+    @State private var isBusy = false
+    @State private var errorMsg: String?
+    @State private var showPair = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            VStack(alignment: .leading, spacing: NSpace.xs) {
+                if let name = AuthClient.shared.session?.displayName {
+                    Text(name)
+                        .font(NFont.body(13))
+                        .foregroundStyle(NSColorToken.textPrimary)
+                }
+                Text(AuthClient.shared.session?.email ?? "")
+                    .font(NFont.mono(10))
+                    .foregroundStyle(NSColorToken.textGhost)
+            }
+            .padding(.horizontal, NSpace.lg)
+            .padding(.top, NSpace.lg)
+            .padding(.bottom, NSpace.md)
+
+            Divider()
+                .overlay(NSColorToken.textGhost.opacity(0.12))
+
+            // Sync diagnostic
+            SyncDiagnosticPanel()
+                .padding(.horizontal, NSpace.lg)
+                .padding(.vertical, NSpace.md)
+
+            Divider()
+                .overlay(NSColorToken.textGhost.opacity(0.12))
+
+            // Compose
+            rowButton("// compose") {
+                NotificationCenter.default.post(name: .nousOpenCompose, object: nil)
+            }
+
+            rowButton("// pair browser") { showPair = true }
+
+            Divider()
+                .overlay(NSColorToken.textGhost.opacity(0.12))
+
+            // Sign out
+            if confirmSignOut {
+                HStack(spacing: NSpace.md) {
+                    Text("// sign out?")
+                        .font(NFont.mono(11))
+                        .foregroundStyle(NSColorToken.Phos.orange)
+                    Spacer()
+                    Button("cancel") { confirmSignOut = false }
+                        .font(NFont.mono(11))
+                        .foregroundStyle(NSColorToken.textGhost)
+                        .buttonStyle(.plain)
+                    Button("confirm") {
+                        isBusy = true
+                        Task {
+                            await AuthClient.shared.signOut()
+                            isBusy = false
+                        }
+                    }
+                    .font(NFont.mono(11))
+                    .foregroundStyle(NSColorToken.Phos.orange)
+                    .buttonStyle(.plain)
+                    .disabled(isBusy)
+                }
+                .padding(.horizontal, NSpace.lg)
+                .padding(.vertical, NSpace.sm)
+            } else {
+                rowButton("// sign out") { confirmSignOut = true }
+            }
+
+            // Delete account
+            if confirmDelete {
+                HStack(spacing: NSpace.md) {
+                    Text("// delete account — irreversible")
+                        .font(NFont.mono(10))
+                        .foregroundStyle(NSColorToken.Phos.orange.opacity(0.8))
+                    Spacer()
+                    Button("cancel") { confirmDelete = false }
+                        .font(NFont.mono(10))
+                        .foregroundStyle(NSColorToken.textGhost)
+                        .buttonStyle(.plain)
+                    Button("delete") {
+                        isBusy = true
+                        Task {
+                            try? await AuthClient.shared.deleteAccount()
+                            isBusy = false
+                        }
+                    }
+                    .font(NFont.mono(10))
+                    .foregroundStyle(NSColorToken.Phos.orange)
+                    .buttonStyle(.plain)
+                    .disabled(isBusy)
+                }
+                .padding(.horizontal, NSpace.lg)
+                .padding(.vertical, NSpace.sm)
+            } else {
+                rowButton("// delete account", danger: true) { confirmDelete = true }
+            }
+
+            if let errorMsg {
+                Text(errorMsg)
+                    .font(NFont.mono(10))
+                    .foregroundStyle(NSColorToken.Phos.orange)
+                    .padding(.horizontal, NSpace.lg)
+                    .padding(.bottom, NSpace.sm)
+            }
+        }
+        .frame(width: 280)
+        .background(NSColorToken.inkPaper)
+        .sheet(isPresented: $showPair) {
+            PairBrowserSheet(userID: AuthClient.shared.session?.userID ?? AppEnv.localUserID)
+                .frame(width: 380, height: 420)
+        }
+    }
+
+    private func rowButton(_ label: String, danger: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(NFont.mono(11))
+                .foregroundStyle(danger
+                    ? NSColorToken.Phos.orange.opacity(0.7)
+                    : NSColorToken.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NSpace.lg)
+                .padding(.vertical, NSpace.sm)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: – Notification name
+
+extension Notification.Name {
+    /// Posted when the briefing picks an atom to open. `userInfo["atomID"]`
+    /// carries the UUID string. MacRootView (or any host) can observe this to
+    /// drive its own selection state — kept decoupled so the briefing sheet
+    /// never reaches into MacRootView internals.
+    static let nousSelectAtom = Notification.Name("nous.selectAtom")
 }
 
 #endif

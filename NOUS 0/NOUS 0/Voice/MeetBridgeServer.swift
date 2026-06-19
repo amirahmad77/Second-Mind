@@ -69,13 +69,15 @@ final class MeetBridgeServer {
 
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
-        // Loopback-only: refuse connections arriving over LAN/WAN interfaces so
-        // remote hosts and DNS-rebinding cannot reach the bridge.
-        params.requiredInterfaceType = .loopback
-        params.prohibitedInterfaceTypes = [.wifi, .cellular, .wiredEthernet]
+        // Loopback-only bind: pin the listener to 127.0.0.1 so LAN hosts and
+        // DNS-rebinding can't reach the bridge. (requiredInterfaceType=.loopback
+        // on a listener still binds *all* interfaces — verified via lsof showing
+        // *:9988 — so we set the local endpoint host explicitly, which is the
+        // reliable way to restrict the bind address. lsof then shows 127.0.0.1:9988.)
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: 9988)
 
-        guard let l = try? NWListener(using: params, on: 9988) else {
-            NousLogger.error("bridge", "Failed to create NWListener on :9988")
+        guard let l = try? NWListener(using: params) else {
+            NousLogger.error("bridge", "Failed to create NWListener on 127.0.0.1:9988")
             return
         }
         listener = l

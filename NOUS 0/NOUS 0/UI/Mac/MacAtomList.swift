@@ -116,6 +116,7 @@ struct MacAtomList: View {
                             atom: atom,
                             isSelected: selectedAtomID == atom.id,
                             inboundCount: store.inboundCount(of: atom.id),
+                            signals: AtomSignals(atom: atom, store: store),
                             bulkMode: bulkMode,
                             isBulkSelected: bulkSelection.contains(atom.id)
                         )
@@ -402,6 +403,7 @@ private struct MacAtomRow: View {
     let atom: AtomSnapshot
     let isSelected: Bool
     var inboundCount: Int = 0
+    var signals: AtomSignals? = nil
     var bulkMode: Bool = false
     var isBulkSelected: Bool = false
 
@@ -466,6 +468,12 @@ private struct MacAtomRow: View {
                                 .font(NFont.mono(10))
                                 .foregroundStyle(atom.type.phosphor.opacity(0.65))
                                 .monospacedDigit()
+                        }
+
+                        // Proactive signals — relates-to / possible-duplicate,
+                        // shared vocabulary with iOS (AtomSignalChips).
+                        if let signals {
+                            AtomSignalChips(signals: signals, tint: atom.type.phosphor)
                         }
 
                         if atom.isRefining {

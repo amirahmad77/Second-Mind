@@ -83,11 +83,19 @@ struct TasksSheet: View {
             }
             .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
-                Text(a.oneLiner)
-                    .font(NFont.body(15))
-                    .foregroundStyle((a.taskDone ?? false) ? NSColorToken.textTertiary : NSColorToken.textPrimary)
-                    .strikethrough(a.taskDone ?? false)
-                    .lineLimit(2)
+                HStack(spacing: NSpace.xs) {
+                    if a.priority == .high {
+                        Image(systemName: "exclamationmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(NSColorToken.Phos.orange)
+                            .accessibilityLabel("High priority")
+                    }
+                    Text(a.oneLiner)
+                        .font(NFont.body(15))
+                        .foregroundStyle((a.taskDone ?? false) ? NSColorToken.textTertiary : NSColorToken.textPrimary)
+                        .strikethrough(a.taskDone ?? false)
+                        .lineLimit(2)
+                }
                 if let due = a.dueAt {
                     Text(dueFmt(due))
                         .font(NFont.mono(10))
@@ -95,6 +103,7 @@ struct TasksSheet: View {
                 }
             }
             Spacer()
+            priorityMenu(for: a)
             dueMenu(for: a)
         }
         .contentShape(Rectangle())
@@ -126,6 +135,36 @@ struct TasksSheet: View {
         .buttonStyle(.plain)
     }
 
+    private func priorityMenu(for atom: AtomSnapshot) -> some View {
+        Menu {
+            Button("high")   { setPriority(atom.id, .high) }
+            Button("normal") { setPriority(atom.id, .normal) }
+            Button("low")    { setPriority(atom.id, .low) }
+        } label: {
+            Image(systemName: atom.priority == .high ? "flag.fill" : "flag")
+                .font(.system(size: 10))
+                .foregroundStyle(priorityColor(atom.priority))
+                .padding(.horizontal, NSpace.sm)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Set priority")
+    }
+
+    private func priorityColor(_ p: TaskPriority?) -> Color {
+        switch p {
+        case .high: NSColorToken.Phos.orange
+        case .low:  NSColorToken.textGhost
+        default:    NSColorToken.textGhost.opacity(0.5)
+        }
+    }
+
+    private func setPriority(_ id: UUID, _ p: TaskPriority) {
+        store.setPriority(id: id, to: p)
+        Haptics.shared.softTick()
+    }
+
     enum Bucket { case today, week, someday, none }
     private func bucket(_ b: Bucket) -> [AtomSnapshot] {
         let cal = Calendar.current; let now = Date()
@@ -145,6 +184,12 @@ struct TasksSheet: View {
                 let wkLater = cal.date(byAdding: .day, value: 7, to: now) ?? now
                 return d > wkLater
             }
+        }
+        // High priority floats up within each bucket; then by due date.
+        .sorted { lhs, rhs in
+            let lr = lhs.priority?.rank ?? 1, rr = rhs.priority?.rank ?? 1
+            if lr != rr { return lr > rr }
+            return (lhs.dueAt ?? .distantFuture) < (rhs.dueAt ?? .distantFuture)
         }
     }
 

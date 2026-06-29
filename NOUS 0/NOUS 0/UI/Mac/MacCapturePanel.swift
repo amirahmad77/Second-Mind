@@ -21,10 +21,12 @@ import SwiftUI
 struct MacCapturePanel: View {
     let store: AtomStore
     let onDismiss: () -> Void
+    var onOpenAtom: ((AtomSnapshot) -> Void)? = nil
 
     @AppStorage("nous.captureDraft") private var persistedDraft = ""
     @State private var buffer: String = ""
     @State private var hintType: AtomType = .thought
+    @State private var similar: AtomSnapshot?
     @FocusState private var focus: Bool
 
     private var cardAccent: Color { hintType.phosphor }
@@ -82,7 +84,51 @@ struct MacCapturePanel: View {
             }
             .padding(.horizontal, NSpace.xl)
             .padding(.top, NSpace.md)
-            .padding(.bottom, NSpace.sm)
+            .padding(.bottom, NSpace.xs)
+
+            // Link picker (shown when [[ is active)
+            LinkPickerBar(
+                text: $buffer,
+                store: store,
+                onPicked: { focus = true },
+                onCancel:  { focus = true }
+            )
+            .padding(.horizontal, NSpace.xl)
+
+            // Markdown toolbar
+            MarkdownToolbar(text: $buffer)
+                .padding(.horizontal, NSpace.xl)
+                .padding(.bottom, NSpace.sm)
+
+            // "You already know this" — capture-time near-match
+            if let similar {
+                Button {
+                    onOpenAtom?(similar)
+                    onDismiss()
+                } label: {
+                    HStack(spacing: NSpace.sm) {
+                        Text("≈ similar")
+                            .font(NFont.monoSmall(10))
+                            .foregroundStyle(NSColorToken.Phos.amber.opacity(0.85))
+                        Text(similar.oneLiner)
+                            .font(NFont.mono(11))
+                            .foregroundStyle(NSColorToken.textSecondary)
+                            .lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: 0)
+                        if onOpenAtom != nil {
+                            Text("open →").font(NFont.monoSmall(10))
+                                .foregroundStyle(NSColorToken.textGhostDim)
+                        }
+                    }
+                    .padding(.horizontal, NSpace.xl)
+                    .padding(.vertical, NSpace.sm)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(onOpenAtom == nil)
+                .transition(.opacity)
+                .accessibilityLabel("Similar existing atom: \(similar.oneLiner)")
+            }
 
             // Action row
             HStack(spacing: NSpace.xl) {
@@ -139,7 +185,7 @@ struct MacCapturePanel: View {
         .task(id: buffer) {
             let trimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
-                withAnimation(.nEaseOutQuint) { hintType = .thought }
+                withAnimation(.nEaseOutQuint) { hintType = .thought; similar = nil }
                 return
             }
             try? await Task.sleep(for: .milliseconds(280))
@@ -147,6 +193,10 @@ struct MacCapturePanel: View {
             let detected = classify(trimmed)
             if detected != hintType {
                 withAnimation(.nEaseOutQuint) { hintType = detected }
+            }
+            let match = store.lexicalSimilar(to: trimmed, limit: 1).first
+            if match?.id != similar?.id {
+                withAnimation(.nEaseOutQuint) { similar = match }
             }
         }
         .onChange(of: buffer) { _, new in persistedDraft = new }
@@ -161,7 +211,7 @@ struct MacCapturePanel: View {
     private func save() {
         let trimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        _ = store.capture(raw: trimmed, type: .thought)
+        _ = store.capture(raw: trimmed, type: hintType)
         NousLogger.info("mac", "capture saved", ["len": trimmed.count, "type": hintType.rawValue])
         persistedDraft = ""
         buffer = ""

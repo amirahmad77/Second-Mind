@@ -1,35 +1,17 @@
 import SwiftUI
+import SwiftData
 
-/// Synthesis surface — appears on swipe-down from Orb (PRD §2.4).
-///
-/// Layout:
-///   ┌─ header bar: // synthesize · close
-///   ├─ question field (TextEditor, monospaced prompt)
-///   ├─ stage bar (subtle, only while streaming)
-///   ├─ answer (progressive, scrollable, markdown-rendered on done)
-///   └─ citation chips (horizontal scroll, tap → open atom)
-///
-/// Stream cancellable via close (PRD: "user can interrupt").
+/// Synthesis surface — appears on swipe-down from Orb.
+/// Uses Gemini directly: embed query → local cosine search → Gemini answer.
 struct SynthesisSheet: View {
     let store: AtomStore
-    let backend: NousBackendClient
+    let gemini: GeminiClient
     let onDismiss: () -> Void
     let onPickAtom: (AtomSnapshot) -> Void
 
-    @State private var vm: SynthesisVM
+    @Environment(\.modelContext) private var ctx
+    @State private var vm: SynthesisVM?
     @FocusState private var focus: Bool
-
-    init(store: AtomStore,
-         backend: NousBackendClient,
-         userID: UUID,
-         onDismiss: @escaping () -> Void,
-         onPickAtom: @escaping (AtomSnapshot) -> Void) {
-        self.store = store
-        self.backend = backend
-        self.onDismiss = onDismiss
-        self.onPickAtom = onPickAtom
-        _vm = State(initialValue: SynthesisVM(backend: backend, userID: userID))
-    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -40,21 +22,32 @@ struct SynthesisSheet: View {
                 Divider()
                     .frame(height: 0.5)
                     .overlay(NSColorToken.textGhost.opacity(0.35))
-                questionArea
-                stageBar
-                answerArea
-                if !vm.citations.isEmpty {
-                    citationStrip
+
+                if let vm {
+                    questionArea(vm: vm)
+                    thread(vm: vm)
                 }
             }
         }
         .background(NSColorToken.inkVoid.ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .task { focus = true }
-        .onDisappear { vm.cancel() }
+        .task {
+            let embeddings = loadEmbeddings()
+            vm = SynthesisVM(gemini: gemini, store: store, fetchEmbeddings: { embeddings })
+            focus = true
+        }
+        .onDisappear { vm?.cancel() }
     }
 
-    // MARK: Backdrop — synthesis blue halo
+    // MARK: Embeddings
+
+    private func loadEmbeddings() -> [(atomID: UUID, vector: [Float])] {
+        let desc = FetchDescriptor<EmbeddingRecord>()
+        let records = (try? ctx.fetch(desc)) ?? []
+        return records.map { ($0.atomID, $0.toFloatArray()) }
+    }
+
+    // MARK: Backdrop
 
     private var backdrop: some View {
         ZStack {
@@ -85,7 +78,7 @@ struct SynthesisSheet: View {
                 .textCase(.uppercase)
                 .tracking(0.10)
             Spacer()
-            if vm.isStreaming {
+            if let vm, vm.isStreaming {
                 Button(action: { vm.cancel() }) {
                     Text("// stop")
                         .font(NFont.mono(11))
@@ -111,14 +104,14 @@ struct SynthesisSheet: View {
 
     // MARK: Question
 
-    private var questionArea: some View {
+    private func questionArea(vm: SynthesisVM) -> some View {
         VStack(alignment: .leading, spacing: NSpace.sm) {
-            Text("// ask your mind")
+            Text(vm.turns.isEmpty ? "// ask your mind" : "// ask a follow-up")
                 .font(NFont.mono(10))
                 .foregroundStyle(NSColorToken.textGhost)
             HStack(alignment: .top, spacing: NSpace.md) {
                 TextField("",
-                          text: $vm.question,
+                          text: Binding(get: { vm.question }, set: { vm.question = $0 }),
                           prompt: Text("what was I thinking about…")
                             .foregroundStyle(NSColorToken.textGhost),
                           axis: .vertical)
@@ -147,84 +140,119 @@ struct SynthesisSheet: View {
 
     // MARK: Stage bar
 
-    @ViewBuilder private var stageBar: some View {
-        if vm.isStreaming, let label = stageLabel(for: vm.stage) {
-            HStack(spacing: NSpace.sm) {
-                Circle()
-                    .fill(NSColorToken.Phos.blue)
-                    .frame(width: 5, height: 5)
-                    .opacity(0.8)
-                Text("// \(label)")
-                    .font(NFont.mono(10))
-                    .foregroundStyle(NSColorToken.textTertiary)
-                if let detail = vm.stageDetail {
-                    Text("· \(detail)")
-                        .font(NFont.mono(10))
-                        .foregroundStyle(NSColorToken.textGhost)
+    // MARK: Thread
+
+    @ViewBuilder
+    private func thread(vm: SynthesisVM) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: NSpace.xxl) {
+                    if vm.turns.isEmpty { intro }
+                    ForEach(vm.turns) { turn in
+                        turnView(turn, isLast: turn.id == vm.turns.last?.id, vm: vm)
+                            .id(turn.id)
+                    }
+                    if case .failed(let msg) = vm.stage { errorPanel(msg) }
+                    Color.clear.frame(height: 1).id("bottom")
                 }
-                Spacer()
+                .frame(maxWidth: 640, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NSpace.xl)
+                .padding(.top, NSpace.md)
+                .padding(.bottom, NSpace.xxl)
             }
-            .padding(.horizontal, NSpace.xl)
-            .padding(.bottom, NSpace.sm)
-            .transition(.opacity)
+            .scrollIndicators(.hidden)
+            .onChange(of: vm.turns.count) { _, _ in
+                withAnimation(.nEaseOutQuint) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: vm.stage) { _, new in
+                if new == .done { withAnimation(.nEaseOutQuint) { proxy.scrollTo("bottom", anchor: .bottom) } }
+            }
         }
+    }
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: NSpace.sm) {
+            Text("// answers ground in your atoms.")
+                .font(NFont.mono(11)).foregroundStyle(NSColorToken.textGhost)
+            Text("// ask a follow-up to go deeper — context carries.")
+                .font(NFont.mono(11)).foregroundStyle(NSColorToken.textGhost.opacity(0.6))
+        }
+        .padding(.top, NSpace.lg)
+    }
+
+    @ViewBuilder
+    private func turnView(_ turn: SynthesisVM.Turn, isLast: Bool, vm: SynthesisVM) -> some View {
+        VStack(alignment: .leading, spacing: NSpace.md) {
+            HStack(alignment: .firstTextBaseline, spacing: NSpace.sm) {
+                Text("//").font(NFont.mono(12)).foregroundStyle(NSColorToken.Phos.cyan.opacity(0.7))
+                Text(turn.question)
+                    .font(NFont.detailBody(16)).foregroundStyle(NSColorToken.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if turn.answer.isEmpty, isLast, vm.isStreaming {
+                HStack(spacing: NSpace.sm) {
+                    Circle().fill(NSColorToken.Phos.blue).frame(width: 5, height: 5).opacity(0.8)
+                    Text("// \(stageLabel(for: vm.stage) ?? "thinking")…")
+                        .font(NFont.mono(10)).foregroundStyle(NSColorToken.textTertiary)
+                }
+                .transition(.opacity)
+            } else if !turn.answer.isEmpty {
+                answerText(turn.answer)
+                confidenceBadge(turn.confidence)
+                if !turn.citations.isEmpty { citationRow(turn.citations) }
+            }
+        }
+    }
+
+    private func confidenceBadge(_ c: SynthesisVM.Confidence) -> some View {
+        let color: Color
+        switch c {
+        case .high:       color = NSColorToken.Phos.green
+        case .medium:     color = NSColorToken.Phos.cyan
+        case .low:        color = NSColorToken.Phos.amber
+        case .ungrounded: color = NSColorToken.Phos.orange
+        }
+        return HStack(spacing: NSpace.xs) {
+            Circle().fill(color).frame(width: 5, height: 5)
+            Text("// \(c.label)").font(NFont.monoSmall(10)).foregroundStyle(color.opacity(0.9))
+        }
+        .accessibilityLabel("Confidence: \(c.label)")
+    }
+
+    private func citationRow(_ cites: [SynthesisVM.Citation]) -> some View {
+        VStack(alignment: .leading, spacing: NSpace.sm) {
+            Text("// grounded in")
+                .font(NFont.mono(10)).foregroundStyle(NSColorToken.textTertiary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: NSpace.md) {
+                    ForEach(cites) { c in
+                        citationChip(c)
+                            .onTapGesture { if let atom = store.atoms[c.id] { onPickAtom(atom) } }
+                    }
+                }
+                .padding(.bottom, NSpace.xs)
+            }
+        }
+        .padding(.top, NSpace.xs)
     }
 
     private func stageLabel(for stage: SynthesisVM.Stage) -> String? {
         switch stage {
         case .embedding:    "embedding query"
-        case .retrieving:   "retrieving atoms"
+        case .retrieving:   "searching vault"
         case .synthesizing: "synthesizing"
-        case .streaming:    "writing"
         default: nil
         }
     }
 
     // MARK: Answer
 
-    @ViewBuilder private var answerArea: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: NSpace.lg) {
-                if vm.answer.isEmpty {
-                    answerPlaceholder
-                } else {
-                    answerText
-                }
-                if case .failed(let msg) = vm.stage {
-                    errorPanel(msg)
-                }
-            }
-            .frame(maxWidth: 640, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, NSpace.xl)
-            .padding(.top, NSpace.md)
-            .padding(.bottom, NSpace.xxl)
-        }
-        .scrollIndicators(.hidden)
-    }
-
-    @ViewBuilder private var answerPlaceholder: some View {
-        VStack(alignment: .leading, spacing: NSpace.md) {
-            if vm.stage == .idle {
-                Text("// answers ground in your atoms.")
-                    .font(NFont.mono(11))
-                    .foregroundStyle(NSColorToken.textGhost)
-                Text("// citations appear as chips below.")
-                    .font(NFont.mono(11))
-                    .foregroundStyle(NSColorToken.textGhost.opacity(0.6))
-            } else if vm.isStreaming {
-                Text("// thinking…")
-                    .font(NFont.mono(11))
-                    .foregroundStyle(NSColorToken.Phos.blue.opacity(0.7))
-            }
-        }
-    }
-
-    @ViewBuilder private var answerText: some View {
-        // While streaming, render plain text (markdown isn't progressive-friendly).
-        // On `.done`, swap to AttributedString with markdown for headings/bullets/emphasis.
-        if vm.stage == .done, let attr = try? AttributedString(
-            markdown: vm.answer,
+    @ViewBuilder
+    private func answerText(_ answer: String) -> some View {
+        if let attr = try? AttributedString(
+            markdown: answer,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             Text(attr)
@@ -233,7 +261,7 @@ struct SynthesisSheet: View {
                 .lineSpacing(4)
                 .textSelection(.enabled)
         } else {
-            Text(vm.answer)
+            Text(answer)
                 .font(NFont.detailBody(17))
                 .foregroundStyle(NSColorToken.textPrimary)
                 .lineSpacing(4)
@@ -255,35 +283,7 @@ struct SynthesisSheet: View {
         .overlay(Rectangle().stroke(NSColorToken.Phos.orange.opacity(0.4), lineWidth: 0.5))
     }
 
-    // MARK: Citation strip
-
-    private var citationStrip: some View {
-        VStack(alignment: .leading, spacing: NSpace.sm) {
-            Divider()
-                .frame(height: 0.5)
-                .overlay(NSColorToken.textGhost.opacity(0.25))
-            Text("// grounded in")
-                .font(NFont.mono(10))
-                .foregroundStyle(NSColorToken.textTertiary)
-                .padding(.horizontal, NSpace.xl)
-                .padding(.top, NSpace.md)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: NSpace.md) {
-                    ForEach(vm.citations) { c in
-                        citationChip(c)
-                            .onTapGesture {
-                                if let atom = store.atoms[c.id] {
-                                    onPickAtom(atom)
-                                }
-                            }
-                    }
-                }
-                .padding(.horizontal, NSpace.xl)
-                .padding(.bottom, NSpace.lg)
-            }
-        }
-        .background(NSColorToken.inkPaper.opacity(0.55))
-    }
+    // MARK: Citation chip
 
     private func citationChip(_ c: SynthesisVM.Citation) -> some View {
         let atom = store.atoms[c.id]
@@ -309,8 +309,10 @@ struct SynthesisSheet: View {
         .overlay(Rectangle().stroke(NSColorToken.textGhost.opacity(0.25), lineWidth: 0.5))
     }
 
+    // MARK: Helpers
+
     private func close() {
-        vm.cancel()
+        vm?.cancel()
         onDismiss()
     }
 

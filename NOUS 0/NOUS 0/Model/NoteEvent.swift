@@ -2,7 +2,7 @@ import Foundation
 
 /// Immutable event-sourced ledger. Append-only. Conflict-free by construction.
 nonisolated enum NoteEventKind: String, Codable, Sendable {
-    case created, updatedRaw, refined, typeChanged, linked, tagged, taskToggled, dueSet, deleted
+    case created, updatedRaw, refined, typeChanged, linked, tagged, taskToggled, dueSet, priorityChanged, deleted
 }
 
 nonisolated struct NoteEventPayload: Codable, Sendable {
@@ -15,6 +15,7 @@ nonisolated struct NoteEventPayload: Codable, Sendable {
     var tags: [String]?
     var taskDone: Bool?
     var dueAt: Date?
+    var priority: TaskPriority?
 
     init(content: String? = nil,
          refinedContent: String? = nil,
@@ -23,7 +24,8 @@ nonisolated struct NoteEventPayload: Codable, Sendable {
          linkKind: String? = nil,
          tags: [String]? = nil,
          taskDone: Bool? = nil,
-         dueAt: Date? = nil) {
+         dueAt: Date? = nil,
+         priority: TaskPriority? = nil) {
         self.content = content
         self.refinedContent = refinedContent
         self.type = type
@@ -32,10 +34,11 @@ nonisolated struct NoteEventPayload: Codable, Sendable {
         self.tags = tags
         self.taskDone = taskDone
         self.dueAt = dueAt
+        self.priority = priority
     }
 
     private enum CodingKeys: String, CodingKey {
-        case content, refinedContent, type, linkTargetID, linkKind, tags, taskDone, dueAt
+        case content, refinedContent, type, linkTargetID, linkKind, tags, taskDone, dueAt, priority
     }
 
     /// Tolerant decode: the Chrome extension / backend may ship enum values iOS
@@ -53,6 +56,9 @@ nonisolated struct NoteEventPayload: Codable, Sendable {
         self.tags            = try c.decodeIfPresent([String].self, forKey: .tags)
         self.taskDone        = try c.decodeIfPresent(Bool.self,   forKey: .taskDone)
         self.dueAt           = try c.decodeIfPresent(Date.self,   forKey: .dueAt)
+        // Tolerant: unknown priority strings decode to nil rather than throwing.
+        self.priority = (try c.decodeIfPresent(String.self, forKey: .priority))
+            .flatMap(TaskPriority.init(rawValue:))
 
         if let raw = try c.decodeIfPresent(String.self, forKey: .type) {
             if let t = AtomType(rawValue: raw) {
@@ -80,6 +86,7 @@ nonisolated struct NoteEventPayload: Codable, Sendable {
         try c.encodeIfPresent(tags,           forKey: .tags)
         try c.encodeIfPresent(taskDone,       forKey: .taskDone)
         try c.encodeIfPresent(dueAt,          forKey: .dueAt)
+        try c.encodeIfPresent(priority?.rawValue, forKey: .priority)
     }
 }
 

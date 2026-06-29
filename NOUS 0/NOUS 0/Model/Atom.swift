@@ -4,6 +4,25 @@ import SwiftUI
 nonisolated enum AtomType: String, Codable, CaseIterable, Sendable {
     case thought, task, meeting, decision, question, reference
 
+    /// Lenient decoding: tolerate source-kind synonyms (a backend that writes
+    /// "meet"/"web" instead of the canonical case) and never throw on an unknown
+    /// value — map it, or fall back to `.thought`. This both heals legacy atoms
+    /// that were stored with the wrong string and hardens event decoding against
+    /// one bad field breaking the whole ledger entry.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = AtomType(rawValue: raw) ?? AtomType.alias(for: raw) ?? .thought
+    }
+
+    private static func alias(for raw: String) -> AtomType? {
+        switch raw.lowercased() {
+        case "meet", "mtg":                       return .meeting
+        case "web", "link", "page", "clip", "url": return .reference
+        case "todo":                              return .task
+        default:                                  return nil
+        }
+    }
+
     @MainActor var phosphor: Color {
         switch self {
         case .thought:   NSColorToken.Phos.cyan
@@ -22,6 +41,21 @@ nonisolated struct SmartTag: Codable, Hashable, Sendable {
     let value: String
 }
 
+/// Optional task urgency. Absent (`nil`) reads as normal — only `high`/`low`
+/// carry visible weight, keeping the default task uncluttered.
+nonisolated enum TaskPriority: String, Codable, CaseIterable, Sendable {
+    case low, normal, high
+
+    /// Sort rank — higher is more urgent. Used to order tasks within a bucket.
+    var rank: Int {
+        switch self {
+        case .high:   2
+        case .normal: 1
+        case .low:    0
+        }
+    }
+}
+
 /// Projection of a note, derived from event ledger. v1 minimal shape.
 nonisolated struct AtomSnapshot: Identifiable, Hashable, Sendable {
     let id: UUID
@@ -36,6 +70,7 @@ nonisolated struct AtomSnapshot: Identifiable, Hashable, Sendable {
     /// task-specific
     var taskDone: Bool?
     var dueAt: Date?
+    var priority: TaskPriority?
     /// Transient (never persisted): set when refine gives up after repeated failures,
     /// cleared on a fresh/edited/successfully-refined fold or on manual retry.
     var refineFailed: Bool = false

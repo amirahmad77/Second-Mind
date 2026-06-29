@@ -90,6 +90,10 @@ struct MacRootView: View {
                     )
                     .overlay(alignment: .bottom) {
                         VStack(spacing: NSpace.sm) {
+                            if let sync {
+                                SyncTroubleBadge(count: sync.quarantinedCount) { sync.retryQuarantined() }
+                                    .animation(.nEaseOutQuint, value: sync.quarantinedCount)
+                            }
                             if let session = activeMeetSession {
                                 MeetCaptureBar(session: session)
                                     .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -456,7 +460,8 @@ extension MacRootView {
         .navigationTitle("")
         .toolbar { macToolbar(store: store) }
         .sheet(isPresented: $showCapture) {
-            MacCapturePanel(store: store) { showCapture = false }
+            MacCapturePanel(store: store, onDismiss: { showCapture = false },
+                            onOpenAtom: { a in showCapture = false; selectedAtomID = a.id })
         }
         .sheet(isPresented: $showCompose) {
             let userID = AuthClient.shared.session?.userID ?? AppEnv.localUserID

@@ -2,8 +2,10 @@ import Foundation
 import SwiftData
 
 /// Invisible background sync. Pushes unsynced NoteEventRecords to Supabase.
-/// Never surfaces errors to UI. Retries silently on next enqueue / bootstrap.
+/// Retries silently on next enqueue / bootstrap; exposes `quarantinedCount` so a
+/// quiet "not syncing" affordance can surface the rare permanent-failure case.
 @MainActor
+@Observable
 final class SyncDaemon {
     private let context: ModelContext
     private let supabase: SupabaseClient
@@ -15,6 +17,8 @@ final class SyncDaemon {
     // payload, RLS-blocked insert) must not head-of-line block the whole queue.
     private var pushAttempts: [UUID: Int] = [:]   // event id → failed push count
     private var quarantined: Set<UUID> = []       // events skipped on future drains
+    /// Observable mirror of `quarantined.count` — drives the "sync stuck" badge.
+    private(set) var quarantinedCount = 0
     private let maxPushAttempts = 5
     private var pendingEmbedIDs: Set<UUID> = []   // dedupe enqueues
     private var embedTask: Task<Void, Never>?     // serialize embed pipeline
@@ -170,6 +174,16 @@ final class SyncDaemon {
         UserDefaults.standard.bool(forKey: "nous.settings.syncPaused")
     }
 
+    /// User-initiated recovery: clear quarantine + per-event attempt counters and
+    /// drain again. Wired to the "sync stuck — retry" affordance.
+    func retryQuarantined() {
+        guard !quarantined.isEmpty else { return }
+        quarantined.removeAll()
+        pushAttempts.removeAll()
+        quarantinedCount = 0
+        Task { await drain() }
+    }
+
     private func drain() async {
         if draining { return }
         // R8 — honor the pause switch. Reentrancy/backoff state is left untouched so
@@ -213,6 +227,7 @@ final class SyncDaemon {
                 pushAttempts[ev.id] = attempts
                 if attempts >= maxPushAttempts {
                     quarantined.insert(ev.id)
+                    quarantinedCount = quarantined.count
                     pushAttempts[ev.id] = nil
                     NousLogger.error("sync", "drain push quarantined event after \(attempts) attempts",
                                      ["eventID": ev.id.uuidString, "kind": ev.kind.rawValue,

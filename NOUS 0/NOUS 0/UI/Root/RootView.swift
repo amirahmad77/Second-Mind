@@ -105,7 +105,10 @@ struct RootView: View {
                     TextCaptureSheet(
                         store: store,
                         onDismiss: { withAnimation(.nDrawer) { sheet = .none; orbMode = .idle } },
-                        onSaved: { pulseOrbSaved() }
+                        onSaved: { pulseOrbSaved() },
+                        onOpenAtom: { a in
+                            withAnimation(.nDrawer) { sheet = .none; orbMode = .idle; selectedAtom = a }
+                        }
                     )
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                 case .search:
@@ -200,6 +203,13 @@ struct RootView: View {
             if !hasSeenOnboarding {
                 OnboardingOverlay { hasSeenOnboarding = true }
                     .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .top) {
+            if let sync {
+                SyncTroubleBadge(count: sync.quarantinedCount) { sync.retryQuarantined() }
+                    .padding(.top, NSpace.sm)
+                    .animation(.nEaseOutQuint, value: sync.quarantinedCount)
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.78), value: undoManager.pendingAtom?.id)

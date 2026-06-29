@@ -51,17 +51,10 @@ struct EntitiesView: View {
         }
     }
 
-    private struct Entity: Identifiable {
-        let name: String
-        let kind: String
-        let count: Int
-        var id: String { name.lowercased() }
-    }
-
     /// Lowercased name of the currently-expanded row (only one open at a time).
     @State private var expanded: String?
     /// Snapshot captured on appear so layout is stable across expand redraws.
-    @State private var entities: [Entity] = []
+    @State private var entities: [AtomStore.EntityRecord] = []
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -120,7 +113,7 @@ struct EntitiesView: View {
 
     // MARK: – Section
 
-    private func section(kind: Kind, rows: [Entity]) -> some View {
+    private func section(kind: Kind, rows: [AtomStore.EntityRecord]) -> some View {
         VStack(alignment: .leading, spacing: NSpace.sm) {
             HStack(spacing: NSpace.sm) {
                 Image(systemName: kind.icon)
@@ -147,7 +140,7 @@ struct EntitiesView: View {
 
     // MARK: – Entity row
 
-    private func entityRow(_ entity: Entity, accent: Color) -> some View {
+    private func entityRow(_ entity: AtomStore.EntityRecord, accent: Color) -> some View {
         let isOpen = expanded == entity.id
         return VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -191,43 +184,79 @@ struct EntitiesView: View {
         }
     }
 
-    private func expandedAtoms(for entity: Entity, accent: Color) -> some View {
-        let mentions = store.atoms(forEntity: entity.name)
-        return VStack(alignment: .leading, spacing: 1) {
-            if mentions.isEmpty {
-                Text("// no live mentions")
+    private func expandedAtoms(for entity: AtomStore.EntityRecord, accent: Color) -> some View {
+        let mentions = entity.atomIDs.compactMap { store.atoms[$0] }.filter { !$0.isDeleted }
+        return VStack(alignment: .leading, spacing: NSpace.xs) {
+            // Span — first/last seen, "smart" at-a-glance context.
+            if let span = spanText(entity) {
+                Text(span)
                     .font(NFont.monoSmall(10))
-                    .foregroundStyle(NSColorToken.textGhost)
-                    .padding(.vertical, NSpace.sm)
+                    .foregroundStyle(NSColorToken.textGhostDim)
                     .padding(.leading, NSpace.xl)
-            } else {
-                ForEach(mentions) { atom in
-                    Button {
-                        onPickAtom(atom)
-                    } label: {
-                        HStack(spacing: NSpace.sm) {
-                            Circle()
-                                .fill(atom.type.phosphor)
-                                .frame(width: 4, height: 4)
-                            Text(atom.oneLiner)
-                                .font(NFont.body(13))
-                                .foregroundStyle(NSColorToken.textSecondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            Spacer(minLength: 0)
+            }
+
+            // Co-occurrence — "often with X · Y". Tap to jump to that entity.
+            if !entity.coOccurring.isEmpty {
+                HStack(spacing: NSpace.xs) {
+                    Text("↔ with")
+                        .font(NFont.monoSmall(10))
+                        .foregroundStyle(NSColorToken.textGhost)
+                    ForEach(entity.coOccurring) { co in
+                        Button {
+                            withAnimation(.nEaseOutQuint) { expanded = co.id }
+                        } label: {
+                            Text("\(co.name) ·\(co.count)")
+                                .font(NFont.monoSmall(10))
+                                .foregroundStyle(accent.opacity(0.85))
+                                .monospacedDigit()
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Capsule().fill(NSColorToken.inkVoid.opacity(0.6)))
+                                .contentShape(Capsule())
                         }
-                        .padding(.vertical, NSpace.xs)
-                        .padding(.leading, NSpace.xl)
-                        .padding(.trailing, NSpace.md)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.leading, NSpace.xl)
+                .padding(.top, 2)
+            }
+
+            ForEach(mentions) { atom in
+                Button {
+                    onPickAtom(atom)
+                } label: {
+                    HStack(spacing: NSpace.sm) {
+                        Circle()
+                            .fill(atom.type.phosphor)
+                            .frame(width: 4, height: 4)
+                        Text(atom.oneLiner)
+                            .font(NFont.body(13))
+                            .foregroundStyle(NSColorToken.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, NSpace.xs)
+                    .padding(.leading, NSpace.xl)
+                    .padding(.trailing, NSpace.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.top, NSpace.xs)
         .padding(.bottom, NSpace.sm)
+    }
+
+    private func spanText(_ entity: AtomStore.EntityRecord) -> String? {
+        guard let first = entity.firstSeen else { return nil }
+        let fmt = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        let mentions = "\(entity.count) mention\(entity.count == 1 ? "" : "s")"
+        if let last = entity.lastSeen,
+           Calendar.current.isDate(first, inSameDayAs: last) == false {
+            return "\(mentions) · \(first.formatted(fmt)) → \(last.formatted(fmt))"
+        }
+        return "\(mentions) · \(first.formatted(fmt))"
     }
 
     // MARK: – Empty state
@@ -252,8 +281,6 @@ struct EntitiesView: View {
     // MARK: – Data
 
     private func reload() {
-        entities = store.allEntities().map {
-            Entity(name: $0.name, kind: $0.kind, count: $0.count)
-        }
+        entities = store.entityRecords()
     }
 }

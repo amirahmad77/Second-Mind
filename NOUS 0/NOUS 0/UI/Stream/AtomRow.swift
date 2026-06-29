@@ -5,6 +5,8 @@ struct AtomRow: View {
     let isSelected: Bool
     var morphNS: Namespace.ID? = nil
     var inboundCount: Int = 0
+    var signals: AtomSignals? = nil
+    var onRetry: (() -> Void)? = nil
     let onTap: () -> Void
 
     @State private var dotBloom: CGFloat = 1.0
@@ -36,10 +38,23 @@ struct AtomRow: View {
                             .foregroundStyle(atom.type.phosphor.opacity(0.65))
                             .monospacedDigit()
                     }
+                    if let signals {
+                        AtomSignalChips(signals: signals, tint: atom.type.phosphor)
+                    }
                     if atom.refineFailed {
-                        Text("· // refine failed")
-                            .font(NFont.mono(10))
-                            .foregroundStyle(NSColorToken.Phos.orange.opacity(0.70))
+                        if let onRetry {
+                            Button(action: onRetry) {
+                                Text("· ↻ retry refine")
+                                    .font(NFont.mono(10))
+                                    .foregroundStyle(NSColorToken.Phos.orange.opacity(0.85))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Retry refine")
+                        } else {
+                            Text("· // refine failed")
+                                .font(NFont.mono(10))
+                                .foregroundStyle(NSColorToken.Phos.orange.opacity(0.70))
+                        }
                     }
                 }
 

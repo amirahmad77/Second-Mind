@@ -349,6 +349,13 @@ final class AtomStore {
         scheduleReminder(for: id, dueAt: date)  // R3 — cancels when date == nil
     }
 
+    /// Set (or clear, via `.normal`) a task's priority. No-ops if unchanged.
+    func setPriority(id: UUID, to priority: TaskPriority) {
+        guard atoms[id]?.priority != priority else { return }
+        let ev = NoteEvent(atomID: id, kind: .priorityChanged, payload: .init(priority: priority))
+        apply(ev, persist: true)
+    }
+
     /// R3 — schedule (or cancel) a local reminder for an atom's due date. Uses the
     /// atom's one-liner as the notification body. Authorization is requested lazily
     /// inside `ReminderScheduler.schedule` the first time a due date is set.
@@ -454,6 +461,7 @@ final class AtomStore {
         case .taskToggled:                     return "task"
         case .tagged:                          return "tags"
         case .dueSet:                          return "due"
+        case .priorityChanged:                 return "priority"
         case .linked, .deleted:                return nil   // monotonic / terminal
         }
     }
@@ -476,7 +484,7 @@ final class AtomStore {
         var a = atoms[e.atomID] ?? AtomSnapshot(
             id: e.atomID, rawContent: "", refinedContent: nil,
             type: .thought, tags: [], createdAt: e.createdAt, updatedAt: e.createdAt,
-            isRefining: false, isDeleted: false, taskDone: nil, dueAt: nil
+            isRefining: false, isDeleted: false, taskDone: nil, dueAt: nil, priority: nil
         )
         switch e.kind {
         case .created:
@@ -506,6 +514,9 @@ final class AtomStore {
             if a.type != .task { a.type = .task }
         case .dueSet:
             a.dueAt = e.payload.dueAt
+        case .priorityChanged:
+            a.priority = e.payload.priority
+            if a.type != .task { a.type = .task }
         case .linked:
             if let target = e.payload.linkTargetID {
                 inboundLinks[target, default: []].insert(e.atomID)
@@ -957,6 +968,99 @@ final class AtomStore {
             }
     }
 
+    /// Cheap, local, network-free lexical near-match for capture-time
+    /// "you already know this" hints — runs as you type, no embeddings.
+    /// Overlap coefficient over content tokens so a short draft that's largely
+    /// contained in an existing atom scores high. Scans recent atoms only.
+    func lexicalSimilar(to text: String, limit: Int = 1, minScore: Double = 0.6) -> [AtomSnapshot] {
+        let qSet = Set(Self.contentTokens(text))
+        guard qSet.count >= 2 else { return [] }
+        var scored: [(AtomSnapshot, Double)] = []
+        for atom in ordered.prefix(400) where !atom.isDeleted {
+            let t = Set(Self.contentTokens(atom.displayContent))
+            let inter = qSet.intersection(t).count
+            guard inter > 0 else { continue }
+            let score = Double(inter) / Double(min(qSet.count, t.count))
+            if score >= minScore { scored.append((atom, score)) }
+        }
+        return scored.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
+    }
+
+    /// Lowercased word tokens (≥3 chars) for lexical matching.
+    static func contentTokens(_ s: String) -> [String] {
+        s.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { $0.count >= 3 }
+    }
+
+    /// A merged, enriched entity: dedupes "Sara" into "Sara Chen", and carries
+    /// co-occurrence (who it shows up with) and a first/last-seen span.
+    struct EntityRecord: Identifiable, Sendable {
+        let name: String
+        let kind: String
+        let count: Int
+        let firstSeen: Date?
+        let lastSeen: Date?
+        let coOccurring: [CoMention]
+        let atomIDs: [UUID]
+        var id: String { name.lowercased() }
+    }
+
+    struct CoMention: Identifiable, Sendable {
+        let name: String
+        let count: Int
+        var id: String { name.lowercased() }
+    }
+
+    private static func nameTokens(_ s: String) -> Set<String> {
+        Set(s.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
+    }
+
+    /// Enriched entity view: merges subset names within a kind (token-subset, so
+    /// "Sara" folds into "Sara Chen"), then computes live counts, co-occurrence,
+    /// and a first/last-seen span. Backs the entities surface.
+    func entityRecords() -> [EntityRecord] {
+        // 1. Live entries only.
+        struct Canon { var name: String; let kind: String; var tokens: Set<String>; var atoms: Set<UUID> }
+        let live = entityIndex.values.compactMap { entry -> Canon? in
+            let liveAtoms = entry.atoms.filter { atoms[$0]?.isDeleted == false }
+            guard !liveAtoms.isEmpty else { return nil }
+            return Canon(name: entry.name, kind: entry.kind,
+                         tokens: Self.nameTokens(entry.name), atoms: Set(liveAtoms))
+        }
+        // 2. Merge: longer names first so shorter aliases fold into them.
+        let ordered = live.sorted { $0.tokens.count != $1.tokens.count
+            ? $0.tokens.count > $1.tokens.count : $0.name.count > $1.name.count }
+        var canon: [Canon] = []
+        for e in ordered {
+            if let i = canon.firstIndex(where: { $0.kind == e.kind && e.tokens.isSubset(of: $0.tokens) }) {
+                canon[i].atoms.formUnion(e.atoms)
+            } else {
+                canon.append(e)
+            }
+        }
+        // 3. Enrich each canonical with span + co-occurrence.
+        return canon.map { c -> EntityRecord in
+            let dates = c.atoms.compactMap { atoms[$0]?.createdAt }
+            let co = canon
+                .filter { $0.name != c.name }
+                .map { CoMention(name: $0.name, count: c.atoms.intersection($0.atoms).count) }
+                .filter { $0.count > 0 }
+                .sorted { $0.count > $1.count }
+                .prefix(4)
+            let sortedAtoms = c.atoms
+                .compactMap { atoms[$0] }
+                .sorted { $0.createdAt > $1.createdAt }
+                .map(\.id)
+            return EntityRecord(name: c.name, kind: c.kind, count: c.atoms.count,
+                                firstSeen: dates.min(), lastSeen: dates.max(),
+                                coOccurring: Array(co), atomIDs: sortedAtoms)
+        }
+        .sorted { $0.count != $1.count ? $0.count > $1.count
+            : $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     /// Live, non-deleted atoms mentioning `name` (case-insensitive), newest-first.
     func atoms(forEntity name: String) -> [AtomSnapshot] {
         let key = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1096,5 +1200,22 @@ final class AtomStore {
     func inboundAtoms(for id: UUID) -> [AtomSnapshot] {
         guard let sources = inboundLinks[id] else { return [] }
         return sources.compactMap { atoms[$0] }.filter { !$0.isDeleted }
+    }
+
+    /// Cached embedding vectors for the given atom ids, as a Sendable value
+    /// snapshot. The MainActor only fetches `EmbeddingRecord`s and copies their
+    /// float arrays out — no `@Model` ever crosses an isolation boundary. Atoms
+    /// without a cached embedding (or with an empty vector) are simply omitted.
+    /// Used by the constellation to lay nodes out by semantic similarity.
+    func embeddingVectors(forIDs ids: Set<UUID>) -> [UUID: [Float]] {
+        guard !ids.isEmpty else { return [:] }
+        let records = (try? context.fetch(FetchDescriptor<EmbeddingRecord>())) ?? []
+        var out: [UUID: [Float]] = [:]
+        out.reserveCapacity(ids.count)
+        for record in records where ids.contains(record.atomID) {
+            let vec = record.toFloatArray()
+            if !vec.isEmpty { out[record.atomID] = vec }
+        }
+        return out
     }
 }

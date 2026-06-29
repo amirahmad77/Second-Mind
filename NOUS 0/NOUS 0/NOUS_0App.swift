@@ -108,14 +108,9 @@ struct NOUS_0App: App {
                 NSApplication.shared.setActivationPolicy(.regular)
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    // Diagnostic: print every window's state to Xcode console.
-                    // Look for ignoresMouseEvents=true or isKeyWindow=false.
+                    // Diagnostic: record every window's state (look for
+                    // ignoresMouseEvents=true or isKeyWindow=false).
                     for (i, win) in NSApplication.shared.windows.enumerated() {
-                        let info = "[\(i)] '\(win.title)' key=\(win.isKeyWindow) " +
-                            "main=\(win.isMainWindow) visible=\(win.isVisible) " +
-                            "ignoresMouse=\(win.ignoresMouseEvents) " +
-                            "level=\(win.level.rawValue) class=\(type(of: win))"
-                        print("[NOUS-DIAG] \(info)")
                         NousLogger.info("mac.window", "window state", [
                             "idx": "\(i)", "title": win.title,
                             "isKey": "\(win.isKeyWindow)",
@@ -125,7 +120,8 @@ struct NOUS_0App: App {
                         // Force all windows to accept mouse events.
                         win.ignoresMouseEvents = false
                     }
-                    print("[NOUS-DIAG] activationPolicy=\(NSApplication.shared.activationPolicy().rawValue)")
+                    NousLogger.info("mac.window", "activation policy",
+                                    ["policy": "\(NSApplication.shared.activationPolicy().rawValue)"])
                     // Bring main window forward and make it key.
                     let mainWin = NSApplication.shared.windows
                         .first(where: { $0.isVisible && !$0.isMiniaturized && !($0 is NSPanel) })

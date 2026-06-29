@@ -34,6 +34,17 @@ struct StreamView: View {
             }
 
             if !anyFilter && !store.ordered.isEmpty {
+                DueTodayBanner(store: store, onPick: { atom in
+                    withAnimation(.nDrawer) { selectedAtom = atom }
+                    Haptics.shared.softTick()
+                })
+                .padding(.top, NSpace.md)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(.init(top: 0, leading: NSpace.xl, bottom: 0, trailing: NSpace.xl))
+            }
+
+            if !anyFilter && !store.ordered.isEmpty {
                 DailyStrip(
                     store: store,
                     onPickAtom: { atom in
@@ -66,6 +77,8 @@ struct StreamView: View {
                             isSelected: selectedAtom?.id == a.id,
                             morphNS: morphNS,
                             inboundCount: store.inboundCount(of: a.id),
+                            signals: AtomSignals(atom: a, store: store),
+                            onRetry: { store.retryRefine(id: a.id) },
                             onTap: {
                                 withAnimation(.nDrawer) { selectedAtom = a }
                                 Haptics.shared.softTick()

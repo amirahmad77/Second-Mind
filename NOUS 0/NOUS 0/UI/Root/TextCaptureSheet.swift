@@ -4,10 +4,12 @@ struct TextCaptureSheet: View {
     let store: AtomStore
     let onDismiss: () -> Void
     var onSaved: (() -> Void)? = nil
+    var onOpenAtom: ((AtomSnapshot) -> Void)? = nil
 
     @AppStorage("nous.captureDraft") private var persistedDraft = ""
     @State private var buffer: String = ""
     @State private var hintType: AtomType = .thought
+    @State private var similar: AtomSnapshot?
     @FocusState private var focus: Bool
 
     private var cardAccent: Color { hintType.phosphor }
@@ -46,6 +48,36 @@ struct TextCaptureSheet: View {
                     .padding(.top, NSpace.xl)
                     .padding(.bottom, NSpace.sm)
 
+                    // ── "You already know this" — capture-time near-match ─────
+                    if let similar {
+                        Button {
+                            onOpenAtom?(similar)
+                            onDismiss()
+                        } label: {
+                            HStack(spacing: NSpace.sm) {
+                                Text("≈ similar")
+                                    .font(NFont.monoSmall(10))
+                                    .foregroundStyle(NSColorToken.Phos.amber.opacity(0.85))
+                                Text(similar.oneLiner)
+                                    .font(NFont.mono(11))
+                                    .foregroundStyle(NSColorToken.textSecondary)
+                                    .lineLimit(1).truncationMode(.tail)
+                                Spacer(minLength: 0)
+                                if onOpenAtom != nil {
+                                    Text("open →").font(NFont.monoSmall(10))
+                                        .foregroundStyle(NSColorToken.textGhostDim)
+                                }
+                            }
+                            .padding(.horizontal, NSpace.xl)
+                            .padding(.vertical, NSpace.sm)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(onOpenAtom == nil)
+                        .transition(.opacity)
+                        .accessibilityLabel("Similar existing atom: \(similar.oneLiner)")
+                    }
+
                     // ── Action row ───────────────────────────────────────────
                     // Lives near the keyboard — minimal thumb travel.
                     // Left: live type indicator (phosphor dot + label).
@@ -71,12 +103,20 @@ struct TextCaptureSheet: View {
                                 Button("discard") { discardDraft() }
                                     .font(NFont.mono(12))
                                     .foregroundStyle(NSColorToken.textGhost)
+                                    .frame(minWidth: 44, minHeight: 44)
+                                    .contentShape(Rectangle())
                                     .transition(.opacity.combined(with: .move(edge: .trailing)))
+                                    .accessibilityLabel("Discard draft")
+                                    .accessibilityHint("Clears the current draft")
                             }
                             Button("save") { dismiss(save: true) }
                                 .font(NFont.mono(12))
                                 .foregroundStyle(hasDraft ? cardAccent : NSColorToken.textGhost)
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
                                 .disabled(!hasDraft)
+                                .accessibilityLabel("Save atom")
+                                .accessibilityHint("Saves and classifies your note")
                         }
                         .animation(.nEaseOutQuint, value: hasDraft)
                     }
@@ -115,7 +155,7 @@ struct TextCaptureSheet: View {
         .task(id: buffer) {
             let trimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
-                withAnimation(.nEaseOutQuint) { hintType = .thought }
+                withAnimation(.nEaseOutQuint) { hintType = .thought; similar = nil }
                 return
             }
             try? await Task.sleep(for: .milliseconds(280))
@@ -123,6 +163,10 @@ struct TextCaptureSheet: View {
             let detected = classify(trimmed)
             if detected != hintType {
                 withAnimation(.nEaseOutQuint) { hintType = detected }
+            }
+            let match = store.lexicalSimilar(to: trimmed, limit: 1).first
+            if match?.id != similar?.id {
+                withAnimation(.nEaseOutQuint) { similar = match }
             }
         }
         .onChange(of: buffer) { _, new in persistedDraft = new }

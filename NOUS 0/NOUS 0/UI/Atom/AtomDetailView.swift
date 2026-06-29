@@ -247,6 +247,13 @@ struct AtomDetailView: View {
                         .padding(.top, NSpace.xl)
                 }
 
+                // Auto-suggested links — parity with macOS detail (was iOS-only gap).
+                if let suggestions = store.linkSuggestions[atom.id], !suggestions.isEmpty {
+                    AlsoSeeStrip(atomID: atom.id, suggestions: suggestions, store: store)
+                        .padding(.horizontal, NSpace.xl)
+                        .padding(.top, NSpace.xl)
+                }
+
                 tagBlock
                     .padding(.horizontal, NSpace.xl)
                     .padding(.top, NSpace.xxxl)

@@ -23,10 +23,48 @@ final class SynthesisVM {
         let score: Double
     }
 
+    /// How well-grounded an answer is, derived from retrieval scores — so the
+    /// user can trust a confident answer and discount a thin one at a glance.
+    enum Confidence: String {
+        case high, medium, low, ungrounded
+
+        var label: String {
+            switch self {
+            case .high:       "well grounded"
+            case .medium:     "grounded"
+            case .low:        "thin grounding"
+            case .ungrounded: "no sources"
+            }
+        }
+
+        static func from(_ cites: [Citation]) -> Confidence {
+            guard let top = cites.map(\.score).max() else { return .ungrounded }
+            if top >= 0.75 && cites.count >= 2 { return .high }
+            if top >= 0.62 { return .medium }
+            return .low
+        }
+    }
+
+    /// One question/answer exchange in the running conversation.
+    struct Turn: Identifiable {
+        let id = UUID()
+        let question: String
+        var answer: String = ""
+        var citations: [Citation] = []
+        var confidence: Confidence = .ungrounded
+    }
+
     var question: String = ""
     private(set) var stage: Stage = .idle
-    private(set) var answer: String = ""
-    private(set) var citations: [Citation] = []
+    /// The running conversation. The last turn is the one being answered.
+    private(set) var turns: [Turn] = []
+
+    /// Latest-turn conveniences — let single-answer surfaces (macOS) read the most
+    /// recent exchange without knowing about the full thread. Follow-up context
+    /// still carries because every `submit()` appends to `turns`.
+    var answer: String { turns.last?.answer ?? "" }
+    var citations: [Citation] { turns.last?.citations ?? [] }
+    var confidence: Confidence { turns.last?.confidence ?? .ungrounded }
 
     var canSubmit: Bool {
         question.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
@@ -57,12 +95,16 @@ final class SynthesisVM {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 2 else { return }
         cancel()
-        answer = ""
-        citations = []
+        // Carry prior exchanges so a follow-up ("why?", "tell me more") has context.
+        let history = turns.suffix(4)
+            .map { "Q: \($0.question)\nA: \($0.answer)" }
+            .joined(separator: "\n\n")
+        turns.append(Turn(question: q))
+        question = ""
         stage = .embedding
         submitTime = Date()
 
-        NousLogger.info("synthesis", "submit", ["q_len": q.count])
+        NousLogger.info("synthesis", "submit", ["q_len": q.count, "turn": turns.count])
 
         task = Task { [weak self] in
             guard let self else { return }
@@ -102,7 +144,10 @@ final class SynthesisVM {
                                           snippet: String(hit.text.prefix(200)),
                                           score: hit.score))
                 }
-                self.citations = cites
+                if !self.turns.isEmpty {
+                    self.turns[self.turns.count - 1].citations = cites
+                    self.turns[self.turns.count - 1].confidence = Confidence.from(cites)
+                }
 
                 // 3. Build context string. Atom-level snapshots first, then the
                 //    matched passages from chunk-only hits (capped to bound prompt size).
@@ -114,18 +159,21 @@ final class SynthesisVM {
                     let label = self.store.atoms[hit.atomID]?.type.label.uppercased() ?? "MEETING"
                     blocks.append("[\(label) — EXCERPT] \(hit.text)")
                 }
-                let context = blocks.joined(separator: "\n\n")
+                let retrieved = blocks.joined(separator: "\n\n")
+                // Follow-ups: give the model the conversation plus fresh retrieval.
+                let context = history.isEmpty
+                    ? retrieved
+                    : "CONVERSATION SO FAR:\n\(history)\n\n---\n\nRETRIEVED CONTEXT:\n\(retrieved)"
 
                 // 4. Synthesize via Gemini
                 self.stage = .synthesizing
                 let result = try await gemini.synthesizeAnswer(question: q, context: context)
 
                 if Task.isCancelled { return }
-                self.answer = result
+                if !self.turns.isEmpty { self.turns[self.turns.count - 1].answer = result }
                 self.stage = .done
 
                 NousLogger.info("synthesis", "done", [
-                    "citations": self.citations.count,
                     "answer_len": result.count,
                     "elapsed_ms": self.elapsedMs,
                 ])
@@ -144,14 +192,17 @@ final class SynthesisVM {
         let wasStreaming = isStreaming
         task?.cancel()
         task = nil
-        if wasStreaming { stage = .idle }
+        if wasStreaming {
+            stage = .idle
+            // Drop the unanswered turn the user just abandoned.
+            if let last = turns.last, last.answer.isEmpty { turns.removeLast() }
+        }
     }
 
     func reset() {
         cancel()
         question = ""
-        answer = ""
-        citations = []
+        turns = []
         stage = .idle
     }
 

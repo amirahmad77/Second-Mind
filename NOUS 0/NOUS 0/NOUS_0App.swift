@@ -96,6 +96,9 @@ struct NOUS_0App: App {
                     SignInView(auth: auth)
                 }
             }
+            // Floor below which the three columns (sidebar + list + detail)
+            // compress into illegibility. Keeps every pane usable on resize.
+            .frame(minWidth: 760, minHeight: 480)
             .onAppear {
                 // Drain any pending App Intent (Capture/Search to NOUS) that
                 // launched the app, routing it to the capture/palette surfaces.
@@ -133,6 +136,7 @@ struct NOUS_0App: App {
         }
         .modelContainer(NousStore.shared)
         .defaultSize(width: 1100, height: 720)
+        .windowResizability(.contentMinSize)
         .commands {
             macCommands
         }

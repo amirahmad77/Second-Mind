@@ -33,7 +33,7 @@ struct AtomRow: View {
                     if inboundCount > 0 {
                         Text("· ← \(inboundCount)")
                             .font(NFont.mono(10))
-                            .foregroundStyle(atom.type.phosphor.opacity(0.40))
+                            .foregroundStyle(atom.type.phosphor.opacity(0.65))
                             .monospacedDigit()
                     }
                     if atom.refineFailed {

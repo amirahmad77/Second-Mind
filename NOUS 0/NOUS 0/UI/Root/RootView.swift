@@ -11,6 +11,7 @@ struct RootView: View {
 
     @Namespace private var atomMorph
 
+    @AppStorage("nous.hasSeenOnboarding") private var hasSeenOnboarding = false
     @State private var store: AtomStore?
     @State private var gemini = GeminiClient()
     @State private var supabase = SupabaseClient()
@@ -193,6 +194,12 @@ struct RootView: View {
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
                 .zIndex(5)
+            }
+        }
+        .overlay {
+            if !hasSeenOnboarding {
+                OnboardingOverlay { hasSeenOnboarding = true }
+                    .transition(.opacity)
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.78), value: undoManager.pendingAtom?.id)

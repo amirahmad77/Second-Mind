@@ -176,6 +176,7 @@ struct MacAtomDetail: View {
                     }
                     .buttonStyle(.plain)
                     .help("Delete atom (⌘⌫)")
+                    .accessibilityLabel("Delete atom")
                 }
             }
         }
@@ -207,6 +208,14 @@ struct MacAtomDetail: View {
                         onPicked: { editorFocus = true; NousLogger.debug("store", "edit link inserted (macOS)") },
                         onCancel: { editorFocus = true }
                     )
+                } else if atom.isRefining && !atom.hasDisplayableBody {
+                    AtomBodyPlaceholder(kind: .refining, type: atom.type)
+                } else if atom.refineFailed && !atom.hasDisplayableBody {
+                    AtomBodyPlaceholder(kind: .failed, type: atom.type) {
+                        store.retryRefine(id: atom.id)
+                    }
+                } else if !atom.hasDisplayableBody && !showRaw {
+                    AtomBodyPlaceholder(kind: .empty, type: atom.type)
                 } else {
                     let content = showRaw ? atom.rawContent : atom.displayContent
                     MarkdownView(
@@ -290,14 +299,14 @@ struct MacAtomDetail: View {
                     .frame(width: 4, height: 4)
                 Text(showRaw ? "// raw" : "// refined")
                     .font(NFont.mono(10))
-                    .foregroundStyle(NSColorToken.textGhost.opacity(0.55))
+                    .foregroundStyle(NSColorToken.textGhostDim)
             } else {
                 Circle()
                     .fill(NSColorToken.textGhost.opacity(0.30))
                     .frame(width: 4, height: 4)
                 Text("// raw")
                     .font(NFont.mono(10))
-                    .foregroundStyle(NSColorToken.textGhost.opacity(0.40))
+                    .foregroundStyle(NSColorToken.textGhostDim)
             }
         }
     }

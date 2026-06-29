@@ -34,6 +34,7 @@ struct MacRootView: View {
     @State private var sync: SyncDaemon?
 
     // Navigation
+    @AppStorage("nous.hasSeenOnboarding") private var hasSeenOnboarding = false
     @State private var sidebarSelection: MacSidebarItem = .stream
     @State private var selectedAtomID: UUID?
     @State private var relatedAtoms: [AtomSnapshot] = []
@@ -115,6 +116,14 @@ struct MacRootView: View {
                                 onClose: { withAnimation(.nEaseOutQuint) { showPalette = false } }
                             )
                             .zIndex(20)
+                        }
+                    }
+                    // First-run intro to the `//` model — shown once.
+                    .overlay {
+                        if !hasSeenOnboarding {
+                            OnboardingOverlay { hasSeenOnboarding = true }
+                                .zIndex(30)
+                                .transition(.opacity)
                         }
                     }
             } else {
@@ -359,7 +368,7 @@ struct MacRootView: View {
                     meetRecorder.isRecording ? "Stop Meeting" : "Record Meeting",
                     systemImage: meetRecorder.isRecording ? "stop.circle.fill" : "mic.circle"
                 )
-                .foregroundStyle(meetRecorder.isRecording ? Color.orange : Color.primary)
+                .foregroundStyle(meetRecorder.isRecording ? NSColorToken.Phos.orange : NSColorToken.textPrimary)
             }
             .help(meetRecorder.isRecording
                   ? "Stop meeting recording (⌘⌥M)"

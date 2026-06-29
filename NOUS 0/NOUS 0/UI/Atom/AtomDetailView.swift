@@ -345,6 +345,14 @@ struct AtomDetailView: View {
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 260, alignment: .topLeading)
                 .lineSpacing(7)
+        } else if atom.isRefining && !atom.hasDisplayableBody {
+            AtomBodyPlaceholder(kind: .refining, type: atom.type)
+        } else if atom.refineFailed && !atom.hasDisplayableBody {
+            AtomBodyPlaceholder(kind: .failed, type: atom.type) {
+                store.retryRefine(id: atom.id)
+            }
+        } else if !atom.hasDisplayableBody && !showRaw {
+            AtomBodyPlaceholder(kind: .empty, type: atom.type)
         } else {
             let content = showRaw ? atom.rawContent : atom.displayContent
             MarkdownView(

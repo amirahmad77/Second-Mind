@@ -89,6 +89,8 @@ struct MacAtomList: View {
                         .foregroundStyle(NSColorToken.textGhost)
                 }
                 .buttonStyle(.plain)
+                .help("Clear filter")
+                .accessibilityLabel("Clear filter")
             }
 
             // Bulk-mode toggle — small mono affordance matching list chrome.
@@ -256,6 +258,7 @@ struct MacAtomList: View {
                 }
                 .buttonStyle(.plain)
                 .help("Delete selected")
+                .accessibilityLabel("Delete selected atoms")
 
                 // Clear selection
                 Button { bulkSelection.removeAll() } label: {
@@ -265,6 +268,7 @@ struct MacAtomList: View {
                 }
                 .buttonStyle(.plain)
                 .help("Clear selection")
+                .accessibilityLabel("Clear selection")
             }
             .padding(.horizontal, NSpace.md)
             .padding(.vertical, NSpace.sm)
@@ -440,9 +444,10 @@ private struct MacAtomRow: View {
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: NSpace.xs) {
-                    // One-liner — full weight always
+                    // One-liner — full weight always; scales with Dynamic Type
+                    // to match the iOS stream row (mono chrome below stays fixed).
                     Text(atom.oneLiner)
-                        .font(NFont.body(13))
+                        .nDynamicBody(13)
                         .foregroundStyle(NSColorToken.textPrimary)
                         .lineLimit(2)
                         .truncationMode(.tail)
@@ -459,14 +464,14 @@ private struct MacAtomRow: View {
                         if inboundCount > 0 {
                             Text("· ← \(inboundCount)")
                                 .font(NFont.mono(10))
-                                .foregroundStyle(atom.type.phosphor.opacity(0.40))
+                                .foregroundStyle(atom.type.phosphor.opacity(0.65))
                                 .monospacedDigit()
                         }
 
                         if atom.isRefining {
                             Text("· refining")
                                 .font(NFont.mono(10))
-                                .foregroundStyle(atom.type.phosphor.opacity(0.50))
+                                .foregroundStyle(atom.type.phosphor.opacity(0.70))
                         }
                     }
 

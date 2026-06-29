@@ -16,6 +16,8 @@ Auth model (v1, single-user):
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import re
 import time
 from datetime import datetime, timezone
@@ -56,6 +58,30 @@ _MEET_EXPIRY_SECONDS = 600
 # { (user_id_str, meet_id): {user_id, meet_id, participants, started_at, last_seen, segment_count} }
 _active_meets: dict[tuple[str, str], dict] = {}
 
+# Idempotency: fingerprints of recently-applied transcript batches per meet, so a
+# retried POST (backend committed but the client lost the response) can't insert
+# the same turns twice. Each flush ships a disjoint batch, so an identical
+# non-empty fingerprint can only mean a retry. Bounded; cleared on session end.
+_MEET_FP_CAP = 64
+_meet_batch_fps: dict[tuple[str, str], list[str]] = {}
+
+
+def _batch_fingerprint(segments: list[TranscriptSegment]) -> str:
+    payload = [[s.speaker or "", s.text, s.at.isoformat() if s.at else ""] for s in segments]
+    return hashlib.sha1(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
+
+
+def _seen_batch(user_id: UUID, meet_id: str, fp: str) -> bool:
+    return fp in _meet_batch_fps.get((str(user_id), meet_id), [])
+
+
+def _remember_batch(user_id: UUID, meet_id: str, fp: str) -> None:
+    key = (str(user_id), meet_id)
+    fps = _meet_batch_fps.setdefault(key, [])
+    fps.append(fp)
+    if len(fps) > _MEET_FP_CAP:
+        del fps[: len(fps) - _MEET_FP_CAP]
+
 
 def _register_meet(user_id: UUID, meet_id: str, participants: list[str],
                    started_at: datetime | None, segment_count: int) -> None:
@@ -73,6 +99,7 @@ def _register_meet(user_id: UUID, meet_id: str, participants: list[str],
 
 def _clear_meet(user_id: UUID, meet_id: str) -> None:
     _active_meets.pop((str(user_id), meet_id), None)
+    _meet_batch_fps.pop((str(user_id), meet_id), None)
 
 
 def _get_active_meets(user_id: UUID) -> list[dict]:
@@ -224,7 +251,9 @@ async def _capture_web(
         payload={
             "content": selection,
             "source": source_payload,
-            "type": "web",
+            # Atom type must match the client's AtomType enum — a web clip is a
+            # reference. (Provenance lives in source.kind="web".)
+            "type": "reference",
             "createdAt": datetime.now(timezone.utc).isoformat(),
             "clientNonce": req.client_nonce,
         },
@@ -310,6 +339,17 @@ async def _capture_meet(
     if not appended and not req.segments:
         return CaptureResponse(atom_id=atom_id, appended=False, refined=False)
 
+    # Idempotency: a retried non-empty batch (same turns) is dropped so the
+    # transcript can't gain duplicate turns when a client retries after a lost
+    # response.
+    if req.segments:
+        fp = _batch_fingerprint(req.segments)
+        if _seen_batch(user_id, meet_id, fp):
+            log.info("meet_batch_duplicate_skipped", atom_id=str(atom_id), fp=fp[:12])
+            return CaptureResponse(atom_id=atom_id, appended=appended, refined=False)
+    else:
+        fp = None
+
     # Track live session state. Final flush (endedAt set) clears it.
     if is_final:
         _clear_meet(user_id, meet_id)
@@ -330,7 +370,9 @@ async def _capture_meet(
                 "content": _segments_plain(req.segments),
                 "segments": segment_dicts,
                 "source": source_payload,
-                "type": "meet",
+                # Must match the client's AtomType enum (case `meeting`), not the
+                # source kind "meet" — otherwise the atom decodes to `.thought`.
+                "type": "meeting",
                 "createdAt": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -343,6 +385,10 @@ async def _capture_meet(
             kind="updatedRaw",
             payload={"segments": segment_dicts, "source": source_payload},
         )
+
+    # Mark this batch applied so an identical retry is ignored (above).
+    if fp is not None:
+        _remember_batch(user_id, meet_id, fp)
 
     # Refine over the CUMULATIVE transcript (all batches so far), not just this
     # batch. The `refined` reducer keeps only the latest event, so each refine

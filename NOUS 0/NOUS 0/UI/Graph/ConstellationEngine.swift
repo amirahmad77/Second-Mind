@@ -56,10 +56,18 @@ final class ConstellationEngine {
         energy = 1
     }
 
-    /// Pre-settle synchronously so the graph opens already in shape, then the
-    /// view animates the final polish live.
-    func warm(_ steps: Int) {
-        for _ in 0..<steps { step() }
+    /// Pre-settle synchronously so the graph opens ALREADY converged — no live
+    /// jiggle. Steps until kinetic energy falls below `energyBelow` or `maxSteps`
+    /// is hit, whichever comes first. Cheap: a few hundred steps of an n≤150
+    /// all-pairs system is a few milliseconds, paid once on open.
+    func warm(maxSteps: Int, until energyBelow: CGFloat) {
+        guard pos.count > 1 else { recenter(); return }
+        for _ in 0..<maxSteps {
+            step()
+            if energy < energyBelow { break }
+        }
+        // A couple of pure collision/recenter passes to remove any residual
+        // overlap left at the moment energy crossed the threshold.
         recenter()
     }
 

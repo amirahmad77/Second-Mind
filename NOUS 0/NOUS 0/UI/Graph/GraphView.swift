@@ -29,7 +29,7 @@ struct GraphView: View {
     private static let maxRadius: CGFloat = 13
     private static let knn = 4
     private static let simThreshold: Float = 0.58
-    private static let warmSteps = 60
+    private static let warmSteps = 700          // hard cap; warm exits early on convergence
     private static let pauseEnergy: CGFloat = 3e-7
     private static let referenceExtent: CGFloat = 250
     private static let minZoom: CGFloat = 0.4
@@ -75,15 +75,19 @@ struct GraphView: View {
     @State private var offset: CGSize = .zero
     @State private var viewSize: CGSize = .zero
 
-    @State private var physicsHot = true
+    @State private var physicsHot = false
     @State private var dragMode: DragMode = .none
     @State private var panStart: CGSize = .zero
     @State private var lastPointer: CGPoint?
     @State private var lastMagnify: CGFloat = 1
     @State private var isInside = false
+    @State private var appeared = false
+    @State private var didInitialFit = false
     #if os(macOS)
     @State private var scrollMonitor: Any?
     #endif
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum DragMode: Equatable { case none, pan, node(Int) }
 
@@ -128,7 +132,10 @@ struct GraphView: View {
     private var field: some View {
         if didBuild, !nodes.isEmpty {
             GeometryReader { geo in
-                TimelineView(.animation) { timeline in
+                // Full frame-rate while physics is hot (settling/dragging); throttle
+                // when idle — 30fps for ambient twinkle, near-static for Reduce Motion
+                // — so an open constellation doesn't pin the GPU at 60fps forever.
+                TimelineView(.animation(minimumInterval: physicsHot ? nil : (reduceMotion ? 2.0 : 1.0 / 30.0))) { timeline in
                     Canvas { ctx, size in
                         if physicsHot {
                             engine.step()
@@ -154,9 +161,16 @@ struct GraphView: View {
                         isInside = false; hoveredIndex = nil
                     }
                 }
-                .onAppear { viewSize = geo.size; installScrollMonitor() }
+                .scaleEffect(appeared || reduceMotion ? 1 : 0.94)
+                .opacity(appeared || reduceMotion ? 1 : 0)
+                .onAppear {
+                    viewSize = geo.size
+                    installScrollMonitor()
+                    initialFit()
+                    withAnimation(reduceMotion ? nil : .nEaseOutQuint.delay(0.04)) { appeared = true }
+                }
                 .onDisappear { removeScrollMonitor() }
-                .onChange(of: geo.size) { _, new in viewSize = new }
+                .onChange(of: geo.size) { _, new in viewSize = new; initialFit() }
             }
         }
     }
@@ -218,7 +232,7 @@ struct GraphView: View {
             let isSel = selectedIndex == i
             let isMatch = searching && matches.contains(i)
             let color = nodes[i].type.phosphor
-            let tw = 0.82 + 0.18 * sin(time * 1.4 + nodes[i].twinkle)
+            let tw = reduceMotion ? 1.0 : 0.82 + 0.18 * sin(time * 1.4 + nodes[i].twinkle)
             let r = nodes[i].pointRadius * (isHover ? 1.28 : 1)
 
             ctx.fill(circle(at: p, radius: r * 2.2),
@@ -267,7 +281,7 @@ struct GraphView: View {
         for m in dust {
             let x = m.x * size.width + px
             let y = m.y * size.height + py
-            let tw = 0.5 + 0.5 * sin(time * 0.6 + m.phase)
+            let tw = reduceMotion ? 0.75 : 0.5 + 0.5 * sin(time * 0.6 + m.phase)
             ctx.fill(circle(at: CGPoint(x: x, y: y), radius: m.r),
                      with: .color(NSColorToken.textGhost.opacity(m.a * tw)))
         }
@@ -279,11 +293,10 @@ struct GraphView: View {
         var candidates: [Int]
         if searching {
             candidates = Array(matches)
-        } else if let h = hoveredIndex {
+        } else if let h = focusIndex {
             candidates = [h] + (adjacency[h].map(Array.init) ?? [])
         } else {
             candidates = Array(hubIndices)
-            if let s = selectedIndex { candidates.append(s) }
             if zoomedIn > 0.3 { candidates = Array(0..<nodes.count) }   // reveal more when close
         }
         candidates = candidates.filter { visibleTypes.contains(nodes[$0].type) }
@@ -350,10 +363,15 @@ struct GraphView: View {
 
     private func clamp(_ v: CGFloat) -> CGFloat { min(max(v, 0), 1) }
 
+    /// What the constellation is currently tracing: a hovered star takes
+    /// priority, otherwise the selected one — so clicking a star keeps its
+    /// constellation lit while the inspector is open, not just on hover.
+    private var focusIndex: Int? { hoveredIndex ?? selectedIndex }
+
     private func nodeAlpha(_ i: Int, searching: Bool, matches: Set<Int>) -> Double {
         if !visibleTypes.contains(nodes[i].type) { return 0.05 }
         if searching { return matches.contains(i) ? 1 : 0.08 }
-        guard let h = hoveredIndex else { return 1 }
+        guard let h = focusIndex else { return 1 }
         if i == h { return 1 }
         return (adjacency[h]?.contains(i) ?? false) ? 1 : 0.32
     }
@@ -363,7 +381,7 @@ struct GraphView: View {
         let weighted = Double(min(max((e.w - 0.5) / 0.5, 0), 1))
         let base = e.explicit ? 0.40 : (0.035 + 0.14 * weighted)
         if searching { return (matches.contains(e.a) && matches.contains(e.b)) ? base : base * 0.06 }
-        guard let h = hoveredIndex else { return base }
+        guard let h = focusIndex else { return base }
         if e.a == h || e.b == h { return e.explicit ? 0.85 : 0.55 }
         return base * 0.28
     }
@@ -412,6 +430,7 @@ struct GraphView: View {
             TextField("search", text: $searchText)
                 .textFieldStyle(.plain).font(NFont.mono(11))
                 .foregroundStyle(NSColorToken.textPrimary).frame(width: 150)
+                .onSubmit { focusBestMatch() }
             if !searchText.isEmpty {
                 Button { searchText = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 11))
@@ -424,7 +443,7 @@ struct GraphView: View {
             Capsule(style: .continuous).fill(NSColorToken.inkRaised.opacity(0.6))
                 .overlay(Capsule().stroke(NSColorToken.textGhost.opacity(0.15), lineWidth: 1))
         )
-        .onChange(of: searchText) { _, _ in focusBestMatch() }
+        .onChange(of: searchText) { _, _ in frameMatches() }
     }
 
     private var zoomControls: some View {
@@ -491,6 +510,9 @@ struct GraphView: View {
             visibleTypes.remove(type)
             if visibleTypes.isEmpty { visibleTypes = Set(AtomType.allCases) }
         } else { visibleTypes.insert(type) }
+        // Re-frame to what's now shown so a filtered subset fills the view.
+        let vis = nodes.indices.filter { visibleTypes.contains(nodes[$0].type) }
+        if !vis.isEmpty { frame(indices: vis, fill: 0.82, animated: true) }
     }
 
     // MARK: – Inspector
@@ -597,8 +619,8 @@ struct GraphView: View {
                 }
                 switch dragMode {
                 case .node(let i): engine.setPosition(i, contentPoint(v.location)); physicsHot = true
-                case .pan: offset = CGSize(width: panStart.width + v.translation.width,
-                                           height: panStart.height + v.translation.height)
+                case .pan: offset = clampedOffset(CGSize(width: panStart.width + v.translation.width,
+                                                         height: panStart.height + v.translation.height))
                 case .none: break
                 }
             }
@@ -663,27 +685,47 @@ struct GraphView: View {
 
     private func clampZoom(_ s: CGFloat) -> CGFloat { min(max(s, Self.minZoom), Self.maxZoom) }
 
+    /// Keep the cloud from being panned entirely out of view — always leaves a
+    /// margin of stars on screen so you can never "lose" the constellation.
+    private func clampedOffset(_ o: CGSize) -> CGSize {
+        guard viewSize.width > 0 else { return o }
+        let half = extent(for: viewSize) * scale   // cloud half-extent on screen
+        let keep: CGFloat = 80
+        let limitX = max(0, viewSize.width / 2 + half - keep)
+        let limitY = max(0, viewSize.height / 2 + half - keep)
+        return CGSize(width: min(max(o.width, -limitX), limitX),
+                      height: min(max(o.height, -limitY), limitY))
+    }
+
     private func zoom(by factor: CGFloat, at p: CGPoint) {
         let newScale = clampZoom(scale * factor)
         guard newScale != scale else { return }
         let ratio = newScale / scale
         let cx = viewSize.width / 2, cy = viewSize.height / 2
-        offset = CGSize(width: (p.x - cx) - ((p.x - cx) - offset.width) * ratio,
-                        height: (p.y - cy) - ((p.y - cy) - offset.height) * ratio)
         scale = newScale
+        offset = clampedOffset(CGSize(width: (p.x - cx) - ((p.x - cx) - offset.width) * ratio,
+                                      height: (p.y - cy) - ((p.y - cy) - offset.height) * ratio))
     }
 
-    private func resetView() { withAnimation(.nEaseOutQuint) { scale = 1; offset = .zero } }
+    private func resetView() {
+        selectedIndex = nil
+        frame(indices: nodes.indices.filter { visibleTypes.contains(nodes[$0].type) },
+              fill: 0.82, animated: true)
+    }
 
     private func focus(on i: Int) {
         guard engine.pos.indices.contains(i) else { return }
         let maxR = extent(for: viewSize)
-        let target = max(scale, 2.0)
+        // Gentle: keep the current zoom if it's already comfortable; only ease in
+        // when zoomed out. No jarring jump-to-2× on every click.
+        let target = scale < 1.5 ? 1.8 : scale
         let p = engine.pos[i]
+        // Bias left by ~half the inspector so the focused star isn't covered.
+        let bias = min(150, viewSize.width * 0.18)
         withAnimation(.nEaseOutQuint) {
             scale = target
-            // bias left so the inspector panel doesn't cover the focused star
-            offset = CGSize(width: -p.x * maxR * target - 120, height: -p.y * maxR * target)
+            offset = clampedOffset(CGSize(width: -p.x * maxR * target - bias,
+                                          height: -p.y * maxR * target))
         }
     }
 
@@ -693,6 +735,47 @@ struct GraphView: View {
         if let b = m.max(by: { (adjacency[$0]?.count ?? 0) < (adjacency[$1]?.count ?? 0) }) {
             selectedIndex = b; focus(on: b)
         }
+    }
+
+    /// Pan/zoom to fit a set of nodes within the viewport. Pure framing — never
+    /// touches selection or physics, so it can run on every keystroke calmly.
+    private func frame(indices: [Int], fill: CGFloat, animated: Bool) {
+        guard viewSize.width > 0, !indices.isEmpty else { return }
+        let maxR = extent(for: viewSize)
+        var minX = CGFloat.greatestFiniteMagnitude, minY = CGFloat.greatestFiniteMagnitude
+        var maxX = -CGFloat.greatestFiniteMagnitude, maxY = -CGFloat.greatestFiniteMagnitude
+        for i in indices where engine.pos.indices.contains(i) {
+            let p = engine.pos[i]
+            minX = min(minX, p.x); maxX = max(maxX, p.x)
+            minY = min(minY, p.y); maxY = max(maxY, p.y)
+        }
+        guard minX <= maxX else { return }
+        let bcx = (minX + maxX) / 2, bcy = (minY + maxY) / 2
+        let hx = max((maxX - minX) / 2, 0.06), hy = max((maxY - minY) / 2, 0.06)
+        let s = clampZoom(min(viewSize.width / 2 * fill / (maxR * hx),
+                              viewSize.height / 2 * fill / (maxR * hy)))
+        let newOffset = CGSize(width: -bcx * maxR * s, height: -bcy * maxR * s)
+        if animated {
+            withAnimation(.nEaseOutQuint) { scale = s; offset = newOffset }
+        } else {
+            scale = s; offset = newOffset
+        }
+    }
+
+    /// One-time fit so any graph — sparse or dense — frames perfectly on open.
+    private func initialFit() {
+        guard !didInitialFit, didBuild, !nodes.isEmpty, viewSize.width > 0 else { return }
+        didInitialFit = true
+        frame(indices: nodes.indices.filter { visibleTypes.contains(nodes[$0].type) },
+              fill: 0.82, animated: false)
+    }
+
+    /// Gently bring search matches into view as you type — no zoom lurch, no
+    /// inspector pop. Enter (`focusBestMatch`) commits to the best single match.
+    private func frameMatches() {
+        let m = matchedIndices()
+        guard !m.isEmpty else { return }
+        frame(indices: Array(m), fill: 0.62, animated: true)
     }
 
     // MARK: – Scroll monitor
@@ -826,10 +909,14 @@ struct GraphView: View {
             ConstellationEngine.Edge(a: $0.a, b: $0.b, w: CGFloat($0.w), explicit: $0.explicit)
         }
         engine.seed(count: count, radii: normRadii, edges: engEdges)
-        engine.warm(Self.warmSteps)
+        engine.warm(maxSteps: Self.warmSteps, until: Self.pauseEnergy)
 
         nodes = meta; adjacency = adj; hubIndices = hubs; typeCounts = counts
-        nebulae = nebs; dust = motes; totalEdges = allEdges.count; physicsHot = true
+        nebulae = nebs; dust = motes; totalEdges = allEdges.count
+        // Opens already converged — physics stays cold until an interaction
+        // (drag) re-heats it, so there is no live settle-jiggle on appear.
+        physicsHot = false
+        didInitialFit = false
 
         NousLogger.info("store", "graph built",
                         ["nodes": "\(count)", "edges": "\(allEdges.count)",

@@ -1,0 +1,64 @@
+# Cloud Build → Artifact Registry → Cloud Run.
+# Trigger: gcloud builds submit --config cloudbuild.yaml \
+#   --substitutions=_REGION=us-central1,_REPO=nous,_SERVICE=nous-backend
+#
+# Required substitutions:
+#   _REGION   GCP region (e.g. us-central1)
+#   _REPO     Artifact Registry repo name (must exist)
+#   _SERVICE  Cloud Run service name
+#
+# Required Secret Manager secrets (mount via --update-secrets at deploy):
+#   nous-supabase-url, nous-supabase-anon-key,
+#   nous-supabase-service-role-key (optional), nous-gemini-api-key
+
+substitutions:
+  _REGION: us-central1
+  _REPO: nous
+  _SERVICE: nous-backend
+
+steps:
+  # 1. Build image (BuildKit on, layer cache from latest tag).
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:$BUILD_ID
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest
+      - --cache-from=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest
+      - .
+    env:
+      - DOCKER_BUILDKIT=1
+
+  # 2. Push both tags.
+  - name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}"]
+
+  # 3. Deploy to Cloud Run.
+  #    Concurrency 40 — SSE streams are long-lived; keep concurrency moderate so a single
+  #    slow synthesis doesn't starve other requests.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:$BUILD_ID
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --cpu=1
+      - --memory=512Mi
+      - --concurrency=40
+      - --timeout=900
+      - --min-instances=0
+      - --max-instances=10
+      - --set-env-vars=ENVIRONMENT=prod,LOG_LEVEL=INFO
+      - --update-secrets=SUPABASE_URL=nous-supabase-url:latest,SUPABASE_ANON_KEY=nous-supabase-anon-key:latest,GEMINI_API_KEY=nous-gemini-api-key:latest
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:$BUILD_ID
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8

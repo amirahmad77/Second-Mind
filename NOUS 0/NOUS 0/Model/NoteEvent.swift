@@ -64,9 +64,15 @@ nonisolated struct NoteEventPayload: Codable, Sendable {
             if let t = AtomType(rawValue: raw) {
                 self.type = t
             } else {
-                // Map known extension/backend values that don't have iOS cases.
-                switch raw {
-                case "web", "link", "article": self.type = .reference
+                // Map known extension/backend source-kind values that aren't
+                // canonical AtomType cases. CRITICAL: "meet"/"mtg" must map to
+                // .meeting — otherwise meeting captures decode to .thought. This
+                // also heals atoms whose `created` event was stored with the old
+                // "meet" string, on the next fold.
+                switch raw.lowercased() {
+                case "meet", "mtg":            self.type = .meeting
+                case "web", "link", "article", "page", "clip", "url": self.type = .reference
+                case "todo":                   self.type = .task
                 default:                       self.type = nil
                 }
             }

@@ -7,4 +7,8 @@ INFOPLIST_KEY_NOUS_SUPABASE_ANON_KEY = $(NOUS_SUPABASE_ANON_KEY)
 INFOPLIST_KEY_NOUS_GEMINI_API_KEY = $(NOUS_GEMINI_API_KEY)
 INFOPLIST_KEY_NOUS_BACKEND_URL = $(NOUS_BACKEND_URL)
 
+// Calendar — reads attendees from current event to auto-label meeting speakers
+INFOPLIST_KEY_NSCalendarsUsageDescription = NOUS reads your calendar to automatically identify who is in a meeting, so it can label each speaker by name in your notes.
+INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = NOUS reads your calendar to automatically identify who is in a meeting, so it can label each speaker by name in your notes.
+
 #include? "LocalSecrets.xcconfig"

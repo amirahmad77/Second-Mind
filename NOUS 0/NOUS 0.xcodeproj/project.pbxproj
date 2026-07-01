@@ -416,6 +416,8 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "NOUS uses the microphone for voice capture when you hold the orb.";
 				"INFOPLIST_KEY_NSScreenCaptureUsageDescription[sdk=macosx*]" = "NOUS captures system audio to transcribe your meetings in real time.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "NOUS transcribes your voice locally so held-orb capture becomes text.";
+				"INFOPLIST_KEY_UIAppFonts[sdk=iphoneos*]" = "DepartureMono-Regular.otf";
+				"INFOPLIST_KEY_UIAppFonts[sdk=iphonesimulator*]" = "DepartureMono-Regular.otf";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -424,8 +426,6 @@
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
-				"INFOPLIST_KEY_UIAppFonts[sdk=iphoneos*]" = "DepartureMono-Regular.otf";
-				"INFOPLIST_KEY_UIAppFonts[sdk=iphonesimulator*]" = "DepartureMono-Regular.otf";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
@@ -468,6 +468,8 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "NOUS uses the microphone for voice capture when you hold the orb.";
 				"INFOPLIST_KEY_NSScreenCaptureUsageDescription[sdk=macosx*]" = "NOUS captures system audio to transcribe your meetings in real time.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "NOUS transcribes your voice locally so held-orb capture becomes text.";
+				"INFOPLIST_KEY_UIAppFonts[sdk=iphoneos*]" = "DepartureMono-Regular.otf";
+				"INFOPLIST_KEY_UIAppFonts[sdk=iphonesimulator*]" = "DepartureMono-Regular.otf";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -476,8 +478,6 @@
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
-				"INFOPLIST_KEY_UIAppFonts[sdk=iphoneos*]" = "DepartureMono-Regular.otf";
-				"INFOPLIST_KEY_UIAppFonts[sdk=iphonesimulator*]" = "DepartureMono-Regular.otf";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
@@ -560,7 +560,10 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "NOUS Widgets/Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.3;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.nous-core.NOUS-0.widgets";
@@ -588,7 +591,10 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "NOUS Widgets/Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.3;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.nous-core.NOUS-0.widgets";

@@ -8,6 +8,21 @@
 # Secrets — real values local only
 **/Secrets.swift
 !**/Secrets.swift.template
+**/LocalSecrets.xcconfig
+.mcp.json
+
+# Claude Code local session/agent state
+.claude/
+.deriveddata/
+
+# Backend env + venv
+nous-backend/.env
+nous-backend/.venv/
+nous-backend/__pycache__/
+nous-backend/**/__pycache__/
+nous-backend/.pytest_cache/
+nous-backend/.ruff_cache/
+nous-backend/.mypy_cache/
 
 # Xcode
 build/

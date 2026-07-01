@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# nous-logs — tail NOUS iOS simulator log file in real time.
+#
+# Usage:
+#   ./nous-logs          # tail -f (default)
+#   ./nous-logs cat      # dump all entries and exit
+#   ./nous-logs grep ERR # grep with color
+#   ./nous-logs jq       # pretty-print last 50 entries as JSON
+#
+# Requires: Xcode + xcrun, an iOS Simulator booted with the NOUS app installed.
+
+BUNDLE="com.nous-core.NOUS-0"
+LOG_FILE="Documents/nous.logs.jsonl"
+
+# Find the app's data container in the booted simulator.
+CONTAINER=$(xcrun simctl get_app_container booted "$BUNDLE" data 2>/dev/null)
+if [ -z "$CONTAINER" ]; then
+  echo "❌  App not found in booted simulator (bundle: $BUNDLE)"
+  echo "    Make sure a simulator is running and the app is installed."
+  exit 1
+fi
+
+FULL_PATH="$CONTAINER/$LOG_FILE"
+if [ ! -f "$FULL_PATH" ]; then
+  echo "⚠️  Log file not yet created: $FULL_PATH"
+  echo "    Run the app once to generate logs."
+  exit 1
+fi
+
+echo "📄  $FULL_PATH"
+echo "───────────────────────────────────────────"
+
+CMD="${1:-tail}"
+case "$CMD" in
+  tail)
+    tail -f "$FULL_PATH" | while IFS= read -r line; do
+      # Color by log level.
+      lvl=$(echo "$line" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('lvl',''))" 2>/dev/null)
+      case "$lvl" in
+        error|fault) printf "\033[31m%s\033[0m\n" "$line" ;;   # red
+        warning)     printf "\033[33m%s\033[0m\n" "$line" ;;   # yellow
+        debug)       printf "\033[90m%s\033[0m\n" "$line" ;;   # dim
+        *)           printf "\033[32m%s\033[0m\n" "$line" ;;   # green
+      esac
+    done
+    ;;
+  cat)
+    cat "$FULL_PATH"
+    ;;
+  grep)
+    shift
+    grep --color=auto "$@" "$FULL_PATH"
+    ;;
+  jq)
+    # Pretty-print last 50 entries using Python (no jq dep required).
+    tail -50 "$FULL_PATH" | python3 -c "
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try:
+        d = json.loads(line)
+        lvl = d.get('lvl','info')
+        colors = {'error':'\033[31m','fault':'\033[31m','warning':'\033[33m','debug':'\033[90m'}
+        c = colors.get(lvl,'\033[32m')
+        meta = ' ' + json.dumps(d['meta']) if 'meta' in d else ''
+        print(f\"{c}{d['t']} [{d['cat']}] {d['msg']}{meta}\033[0m\")
+    except:
+        print(line)
+"
+    ;;
+  *)
+    echo "Usage: $0 [tail|cat|grep <pattern>|jq]"
+    exit 1
+    ;;
+esac

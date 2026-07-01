@@ -345,6 +345,29 @@
 
   // ── Flushing ────────────────────────────────────────────────────────
 
+  // Send the final flush directly from the page context instead of through
+  // chrome.runtime.sendMessage. teardown() fires on beforeunload/pagehide —
+  // right as this frame is being destroyed — and the message port back from
+  // background.js can die mid-flight even when the capture itself succeeded,
+  // throwing "the message channel closed before a response was received".
+  // fetch(..., {keepalive:true}) is the browser-native mechanism built for
+  // exactly this: the request survives the document unloading. This is the
+  // single flush most likely to carry the meeting's closing content, so it's
+  // worth bypassing the SW round-trip entirely rather than losing the race.
+  async function directCapture(payload) {
+    const v = await chrome.storage.local.get(["nous.backendUrl", "nous.token"]);
+    const base = (v["nous.backendUrl"] || "https://nous-backend-k7xtwifwcq-uc.a.run.app").replace(/\/+$/, "");
+    const token = v["nous.token"];
+    if (!token) throw new Error("not paired");
+    const res = await fetch(`${base}/v1/capture`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    });
+    if (!res.ok) throw new Error(`capture failed: ${res.status}`);
+  }
+
   async function flush({ final = false } = {}) {
     if (cloudCaptureSuppressed) {
       // Local app is recording this meeting. Discard buffered captions so we
@@ -374,9 +397,16 @@
       client_nonce: `${MEET_ID}-${Date.now()}`,
     };
     try {
-      await chrome.runtime.sendMessage({ type: "NOUS_CAPTURE", payload });
+      if (final) {
+        await directCapture(payload);
+      } else {
+        await chrome.runtime.sendMessage({ type: "NOUS_CAPTURE", payload });
+      }
     } catch (e) {
-      segments.unshift(...batch);
+      // A dropped final flush has no future tick to retry on — the page is
+      // already gone by the time we'd try again, so there's nothing to
+      // unshift into. Non-final flushes get another chance next tick.
+      if (!final) segments.unshift(...batch);
       console.warn("[nous] meet flush failed", e);
     }
   }

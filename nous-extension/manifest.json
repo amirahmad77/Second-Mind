@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "NOUS Capture",
+  "version": "0.2.0",
+  "description": "Save any web selection or link and every Google Meet into NOUS. Bridges to the NOUS desktop app to avoid double-capturing meetings it records locally.",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "tabs",
+    "scripting",
+    "storage",
+    "tabCapture",
+    "offscreen",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://*.axiom.co/*",
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "NOUS"
+  },
+  "web_accessible_resources": [],
+  "commands": {
+    "capture-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+J",
+        "mac": "Command+Shift+J"
+      },
+      "description": "Save selection / page link to NOUS"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content/meet.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/universal.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

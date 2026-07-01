@@ -1,0 +1,167 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>NOUS</title>
+    <style>
+      :root {
+        --bg: #0e0e10;
+        --surface: #16161a;
+        --fg: #f2f2f0;
+        --muted: #8a8a8f;
+        --phos: #b8ff5e;
+        --danger: #ff7a7a;
+        --radius: 10px;
+      }
+      html, body {
+        margin: 0;
+        width: 320px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif;
+      }
+      .wrap { padding: 18px 16px 16px; }
+      .label {
+        font: 500 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      h1 {
+        margin: 0 0 14px;
+        font: 600 15px/1.2 ui-sans-serif, system-ui;
+        letter-spacing: -0.01em;
+      }
+      .row { display: flex; gap: 8px; align-items: center; }
+      input[type="text"], input[type="url"] {
+        flex: 1;
+        background: var(--surface);
+        border: 1px solid #262629;
+        color: var(--fg);
+        padding: 9px 10px;
+        border-radius: var(--radius);
+        font: inherit;
+        outline: none;
+        transition: border-color 160ms ease-out, transform 160ms ease-out;
+      }
+      input:focus { border-color: var(--phos); }
+      button {
+        background: var(--phos);
+        color: #0a0a0b;
+        border: 0;
+        padding: 9px 12px;
+        border-radius: var(--radius);
+        font: 600 12px/1 ui-sans-serif, system-ui;
+        cursor: pointer;
+        transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+      }
+      button:active { transform: scale(0.97); }
+      button.secondary {
+        background: transparent;
+        color: var(--fg);
+        border: 1px solid #2a2a2e;
+      }
+      .stack { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+      .status {
+        font-size: 12px;
+        color: var(--muted);
+        min-height: 1em;
+      }
+      .status.err { color: var(--danger); }
+      .status.ok { color: var(--phos); }
+      .foot {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid #1d1d20;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      code {
+        font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="label">NOUS · capture</div>
+      <h1 id="headline">Pair this browser</h1>
+
+      <div id="pair-view" class="stack">
+        <div class="label">6-digit code from iPhone</div>
+        <div class="row">
+          <input id="code" type="text" inputmode="numeric" pattern="\d{6}" maxlength="6" autocomplete="off" placeholder="000000" />
+          <button id="pair-btn">Pair</button>
+        </div>
+        <div class="label">Label (optional)</div>
+        <input id="label" type="text" placeholder="Arc on MacBook" />
+        <div class="status" id="pair-status"></div>
+      </div>
+
+      <div id="ok-view" class="stack" hidden>
+        <div class="label">paired as</div>
+        <div id="who"></div>
+
+        <div class="label">shortcut</div>
+        <code>⌘⇧J — save selection / link</code>
+
+        <div class="label">stats</div>
+        <div id="stats" style="display:flex;gap:14px;font:13px ui-monospace,monospace">
+          <span><span class="label" style="color:var(--phos)">ok</span> <span id="ok-count">0</span></span>
+          <span><span class="label" style="color:var(--danger)">err</span> <span id="err-count">0</span></span>
+        </div>
+
+        <div class="label">last event</div>
+        <div id="last-event" style="font:12px/1.4 ui-monospace,monospace;color:var(--muted);min-height:1em"></div>
+
+        <div class="label" style="margin-top:10px">local bridge</div>
+        <div id="bridge-status" style="font:12px/1.4 ui-monospace,monospace;color:var(--muted);min-height:1em">disconnected</div>
+        <div id="bridge-rec" style="font:12px/1.4 ui-monospace,monospace;color:var(--phos);min-height:1em" hidden></div>
+
+        <div class="label" id="last-error-label" hidden>last error</div>
+        <div id="last-error" style="font:12px/1.4 ui-monospace,monospace;color:var(--danger)" hidden></div>
+
+        <div class="row" style="margin-top:6px">
+          <button id="health" class="secondary">Test connection</button>
+          <button id="capture-test">Send test capture</button>
+        </div>
+        <div class="status" id="diag-status"></div>
+
+        <div class="label" style="margin-top:10px">logs</div>
+        <div class="row">
+          <button id="open-logs" class="secondary">Open logs</button>
+          <button id="copy-logs" class="secondary">Copy logs</button>
+          <button id="clear-logs" class="secondary" style="color:var(--danger)">Clear</button>
+        </div>
+
+        <div class="row">
+          <button id="unpair" class="secondary">Unpair</button>
+        </div>
+      </div>
+
+      <div class="foot" style="flex-direction:column;gap:8px;align-items:stretch">
+        <div class="row">
+          <span class="label">backend</span>
+          <input id="backend" type="url" style="flex:1;margin-left:8px" />
+        </div>
+        <div class="row">
+          <span class="label" style="white-space:nowrap">axiom token</span>
+          <input id="axiom-token" type="password" placeholder="xaat-…" style="flex:1;margin-left:8px" />
+        </div>
+        <div class="row">
+          <span class="label" style="white-space:nowrap">dataset</span>
+          <input id="axiom-dataset" type="text" placeholder="nous-extension" style="flex:1;margin-left:8px" />
+          <button id="axiom-save" style="margin-left:8px;white-space:nowrap">Save</button>
+        </div>
+        <div class="row">
+          <span class="label" style="white-space:nowrap">bridge token</span>
+          <input id="bridge-token" type="text" placeholder="paste from NOUS app" autocomplete="off" style="flex:1;margin-left:8px;font-family:ui-monospace,monospace" />
+          <button id="bridge-save" style="margin-left:8px;white-space:nowrap">Save</button>
+        </div>
+        <div class="status" id="bridge-token-status"></div>
+      </div>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

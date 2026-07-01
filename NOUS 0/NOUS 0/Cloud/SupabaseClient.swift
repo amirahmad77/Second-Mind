@@ -41,7 +41,12 @@ actor SupabaseClient {
         return req
     }
 
-    /// Insert one event row. Idempotent via `Prefer: resolution=ignore-duplicates` on id.
+    /// Insert one event row.
+    /// Uses `return=representation` (not `return=minimal`) so we can detect when
+    /// Supabase RLS silently blocks the write — a 200 OK with 0 rows returned
+    /// means the policy excluded the insert without raising an error. Without this
+    /// check, drain() marks the record synced=true and the event is lost forever.
+    /// Duplicate events (same id) return HTTP 409 and are treated as success.
     func pushEvent(_ e: NoteEvent) async throws {
         struct Row: Encodable {
             let id: UUID
@@ -55,9 +60,23 @@ actor SupabaseClient {
                       kind: e.kind.rawValue, payload: e.payload, created_at: e.createdAt)
         let data = try JSONEncoder.nous.encode([row])
         let req = await request("rest/v1/events", method: "POST", body: data,
-                          prefer: "resolution=ignore-duplicates,return=minimal")
-        let (_, resp) = try await URLSession.shared.data(for: req)
+                          prefer: "return=representation")
+        let (responseData, resp) = try await URLSession.shared.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        // 409 = unique-constraint conflict (duplicate event id) — already in Supabase.
+        if status == 409 { return }
         try Self.check(resp)
+        // A 200/201 with an empty JSON array means RLS blocked the insert without
+        // raising an error. Throw so drain() retries with backoff instead of
+        // silently marking the record synced.
+        if let arr = try? JSONSerialization.jsonObject(with: responseData) as? [[String: Any]],
+           arr.isEmpty {
+            NousLogger.error("sync", "pushEvent: 0 rows inserted — check Supabase RLS policy on events table",
+                             ["eventID": e.id.uuidString, "userID": e.userID.uuidString])
+            throw NSError(domain: "Supabase.pushEvent", code: 0,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "RLS blocked insert (0 rows returned). Ensure policy: auth.uid() = user_id"])
+        }
     }
 
     /// Pull events authored by the current user since `since` (exclusive).
@@ -74,9 +93,12 @@ actor SupabaseClient {
             .init(name: "limit", value: String(limit)),
         ]
         if let since {
-            // PostgREST timestamps: ISO8601 w/ fractional seconds not always parsed,
-            // so use plain second-precision UTC.
-            let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]
+            // Use fractional-second precision so the cursor isn't truncated to whole
+            // seconds. Without .withFractionalSeconds, a cursor of T12:00:00.500Z
+            // becomes "gt.T12:00:00Z", permanently re-fetching the same sub-second
+            // events on every poll cycle.
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             items.append(.init(name: "created_at", value: "gt.\(f.string(from: since))"))
         }
         components.queryItems = items
@@ -99,7 +121,23 @@ actor SupabaseClient {
             let payload: NoteEventPayload
             let created_at: Date
         }
-        let rows = (try? JSONDecoder.nous.decode([Row].self, from: data)) ?? []
+        // Decode the batch. On failure, fall back to row-by-row so one malformed
+        // event doesn't silently discard the entire pull (the old `try? ?? []`
+        // pattern would advance no cursor and retry forever on the same bad batch).
+        let rows: [Row]
+        do {
+            rows = try JSONDecoder.nous.decode([Row].self, from: data)
+        } catch {
+            NousLogger.error("sync", "fetchEvents batch decode failed, falling back to row-by-row",
+                             ["error": error.localizedDescription])
+            guard let rawArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                throw error
+            }
+            rows = rawArray.compactMap { dict in
+                guard let rowData = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+                return try? JSONDecoder.nous.decode(Row.self, from: rowData)
+            }
+        }
         return rows.compactMap { r in
             guard let k = NoteEventKind(rawValue: r.kind) else { return nil }
             return NoteEvent(id: r.id, atomID: r.atom_id, kind: k,

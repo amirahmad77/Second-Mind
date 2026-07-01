@@ -20,19 +20,23 @@ struct DeleteUndoToast: View {
                 Text("undo")
                     .font(NFont.mono(12).weight(.medium))
                     .foregroundStyle(NSColorToken.Phos.amber)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Undo delete")
+            .accessibilityHint("Restores the deleted atom")
         }
         .padding(.horizontal, NSpace.lg)
-        .padding(.vertical, NSpace.sm)
+        .padding(.vertical, NSpace.xs)
         .background(
             Capsule()
-                .fill(Color(white: 0.10))
+                .fill(NSColorToken.inkRaised)
                 .overlay(
                     Capsule()
-                        .stroke(NSColorToken.textGhost.opacity(0.12), lineWidth: 0.5)
+                        .stroke(NSColorToken.textGhost.opacity(0.14), lineWidth: 0.5)
                 )
         )
-        .shadow(color: .black.opacity(0.4), radius: 16, y: 4)
+        .shadow(color: NSColorToken.inkVoid.opacity(0.85), radius: 20, y: 6)
     }
 }
